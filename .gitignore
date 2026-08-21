@@ -8,3 +8,7 @@ wheels/
 
 # Virtual environments
 .venv
+
+# Local Celonis credentials
+.env
+!.env.example

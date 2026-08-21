@@ -1,7 +1,7 @@
 [project]
 name = "erd-celonis"
 version = "0.1.0"
-description = "Add your description here"
+description = "Generate NetworkX entity-relationship diagrams from Celonis data models"
 readme = "README.md"
 requires-python = ">=3.13"
 
@@ -15,7 +15,12 @@ dependencies = [
     "python-dotenv>=1.0,<2.0",
     "saolapy>=0.3.3,<1.0",
     "networkx>=3.6.1",
+    "matplotlib>=3.9,<4.0",
+    "fire>=0.7.1",
 ]
+
+[project.scripts]
+erd-celonis = "erd_celonis.cli:main"
 
 [build-system]
 requires = ["hatchling"]
