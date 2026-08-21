@@ -101,6 +101,48 @@ def test_build_data_model_graph_reports_metadata_progress():
     ]
 
 
+def test_build_data_model_graph_reuses_columns_in_table_metadata():
+    class PreloadedTable:
+        id = "table-id"
+        name = "ORDERS"
+        alias = None
+        primary_keys = ["ID"]
+        columns = [Column("ID", "INTEGER", primary_key=True)]
+
+        def get_columns(self):
+            raise AssertionError("get_columns() should not be called for preloaded metadata")
+
+    model = DataModel("model-id", "Sales", [PreloadedTable()], [])
+    graph = build_data_model_graph(model)
+
+    assert graph.nodes["table:table-id"]["columns"] == [
+        {"name": "ID", "type": "INTEGER", "primary_key": True}
+    ]
+
+
+def test_build_data_model_graph_fetches_columns_only_when_missing():
+    class TableWithoutEmbeddedColumns:
+        id = "table-id"
+        name = "ORDERS"
+        alias = None
+        primary_keys = ["ID"]
+        columns = None
+
+        def __init__(self):
+            self.column_requests = 0
+
+        def get_columns(self):
+            self.column_requests += 1
+            return [Column("ID", "INTEGER", primary_key=True)]
+
+    table = TableWithoutEmbeddedColumns()
+    model = DataModel("model-id", "Sales", [table], [])
+    graph = build_data_model_graph(model)
+
+    assert table.column_requests == 1
+    assert graph.nodes["table:table-id"]["columns"][0]["name"] == "ID"
+
+
 def test_build_data_pool_graph_namespaces_models_and_can_select_one_model():
     model_a = DataModel("model-a", "A", [Table("table-a", "A_TABLE")], [])
     model_b = DataModel("model-b", "B", [Table("table-b", "B_TABLE")], [])

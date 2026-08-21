@@ -77,6 +77,8 @@ def build_data_pool_graph(
     If ``data_model_id`` is supplied, only that model is included.  Otherwise
     all data models in the pool are merged into one graph.  Table node IDs are
     namespaced by data model so similarly named tables remain distinct.
+
+    Args:
         progress: Optional callback for status messages.
     """
 
@@ -93,7 +95,11 @@ def build_data_pool_graph(
     graph.graph["data_pool_name"] = _value(data_pool, "name")
 
     for model in data_models:
-        model_graph = build_data_model_graph(model, include_columns=include_columns, progress=progress)
+        model_graph = build_data_model_graph(
+            model,
+            include_columns=include_columns,
+            progress=progress,
+        )
         namespace = _model_namespace(model)
         for node, attrs in model_graph.nodes(data=True):
             graph.add_node(
@@ -227,11 +233,17 @@ def _build_graph(
     table_items = [table for table in tables if table is not None]
     table_nodes: dict[str, str] = {}
 
-    for table in _progress_tables(table_items, progress=progress, include_columns=include_columns):
+    table_iterator: Iterable[Any] = table_items
+    if progress is not None:
+        from tqdm.auto import tqdm
+
+        table_iterator = tqdm(table_items, desc="Preparing tables", unit="table")
+
+    for table in table_iterator:
         table_id = _identifier(table, "table")
         node_id = f"table:{table_id}"
         table_nodes[table_id] = node_id
-        columns = _table_columns(table) if include_columns else []
+        columns = _table_columns(table, include_columns=include_columns, progress=progress)
         primary_keys = _primary_keys(table, columns)
         display_name = _display_table_name(table)
         graph.add_node(
@@ -276,19 +288,26 @@ def _build_graph(
     return graph
 
 
-def _progress_tables(
-    tables: list[Any],
+def _table_columns(
+    table: Any,
     *,
-    progress: Callable[[str], None] | None,
     include_columns: bool,
-) -> Iterable[Any]:
-    if progress is None:
-        return tables
+    progress: Callable[[str], None] | None,
+) -> list[dict[str, Any]]:
+    """Use embedded columns first and call the API only when they are absent."""
 
-    from tqdm.auto import tqdm
+    if not include_columns:
+        return []
+    columns = getattr(table, "columns", None)
+    if columns is not None:
+        return _normalise_columns(column for column in columns if column is not None)
 
-    description = "Fetching columns" if include_columns else "Processing tables"
-    return tqdm(tables, desc=description, unit="table")
+    method = getattr(table, "get_columns", None)
+    if not callable(method):
+        return []
+    if progress is not None:
+        _report(progress, f"Fetching columns for {_display_table_name(table)}...")
+    return _normalise_columns(method() or [])
 
 
 def _report(progress: Callable[[str], None] | None, message: str) -> None:
@@ -329,11 +348,11 @@ def _model_namespace(data_model: Any) -> str:
     return _identifier(data_model, "data model")
 
 
-def _table_columns(table: Any) -> list[dict[str, Any]]:
-    method = getattr(table, "get_columns", None)
-    raw_columns = method() if callable(method) else getattr(table, "columns", None)
+def _normalise_columns(raw_columns: Iterable[Any]) -> list[dict[str, Any]]:
+    """Convert Pycelonis column objects into stable graph metadata."""
+
     columns: list[dict[str, Any]] = []
-    for column in raw_columns or []:
+    for column in raw_columns:
         if column is None:
             continue
         name = _value(column, "name")

@@ -54,8 +54,10 @@ uv run erd-celonis "<data-pool-id>" "<data-model-id>" \
 
 Use `--include_columns=False` when only the table-level relationship graph is
 needed. The CLI prints progress for authentication, Celonis metadata calls,
-column fetching, and rendering. Fire also exposes the command help with
-`erd-celonis --help`.
+column fetching, and rendering. When Pycelonis includes columns in the table
+metadata response, they are reused without another request. Only tables
+without embedded columns call the table-column endpoint. Fire also exposes
+the command help with `erd-celonis --help`.
 
 Relationships are taken from Celonis' configured foreign keys. The tool does
 not infer relationships merely because two columns have the same name.
