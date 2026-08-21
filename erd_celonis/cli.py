@@ -3,10 +3,19 @@
 from __future__ import annotations
 
 import os
+import time
 from pathlib import Path
 
 from fire import Fire
 from rich.console import Console
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    TextColumn,
+    TimeElapsedColumn,
+    TimeRemainingColumn,
+)
 from rich.status import Status
 
 from .erd import build_data_pool_graph, render_erd
@@ -24,6 +33,15 @@ class _StatusLine:
     def __init__(self, console: Console | None = None) -> None:
         self.console = console or Console()
         self._status: Status | None = None
+        self._progress: Progress | None = None
+        self._progress_task_id: int | None = None
+        self._columns_started_at: float | None = None
+        self._columns_total = 0
+
+    def __call__(self, message: str) -> None:
+        """Allow this reporter to be passed directly as a callback."""
+
+        self.report(message)
 
     def report(self, message: str) -> None:
         """Update the live status or print a fallback line when redirected."""
@@ -40,6 +58,67 @@ class _StatusLine:
 
     def close(self) -> None:
         """Stop Rich's live display so subsequent output starts on a new line."""
+
+        self.finish_columns()
+        if self._status is not None:
+            self._status.stop()
+            self._status = None
+
+    def start_columns(self, total: int) -> None:
+        """Start the live column-fetch progress display."""
+
+        self.finish_status()
+        self._columns_started_at = time.monotonic()
+        self._columns_total = total
+        if self.console.is_terminal:
+            self._progress = Progress(
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(),
+                MofNCompleteColumn(),
+                TimeElapsedColumn(),
+                TimeRemainingColumn(),
+                console=self.console,
+                transient=True,
+            )
+            self._progress_task_id = self._progress.add_task(
+                "[erd-celonis] Fetching columns",
+                total=total,
+            )
+            self._progress.start()
+        else:
+            self.console.print(f"[erd-celonis] Fetching columns (0/{total})...", markup=False)
+
+    def update_columns(self, completed: int, table_name: str) -> None:
+        """Update completed column requests and the live ETA."""
+
+        if self._progress is not None and self._progress_task_id is not None:
+            self._progress.update(
+                self._progress_task_id,
+                completed=completed,
+                description=f"[erd-celonis] Fetching columns: {table_name}",
+            )
+            return
+
+        elapsed = time.monotonic() - (self._columns_started_at or time.monotonic())
+        remaining = (elapsed / completed) * (self._columns_total - completed) if completed else 0
+        self.console.print(
+            f"[erd-celonis] Fetched columns ({completed}/{self._columns_total}): "
+            f"{table_name} (ETA {remaining:.1f}s)",
+            markup=False,
+        )
+
+    def finish_columns(self) -> None:
+        """Stop and clear the column progress display."""
+
+        if self._progress is not None:
+            self._progress.stop()
+            self._progress = None
+            self._progress_task_id = None
+        self._columns_started_at = None
+        self._columns_total = 0
+
+    def finish_status(self) -> None:
+        """Stop the ordinary status display before starting a progress task."""
 
         if self._status is not None:
             self._status.stop()
@@ -71,7 +150,9 @@ def erd(
     """
 
     status = _StatusLine()
-    report = status.report
+    # Pass the reporter object, not only its report method, so the ERD builder
+    # can activate Rich's ETA-enabled progress task for column fetching.
+    report = status
 
     try:
         report("Loading environment configuration...")

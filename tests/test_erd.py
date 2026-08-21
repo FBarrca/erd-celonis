@@ -138,11 +138,13 @@ def test_build_data_model_graph_reports_metadata_progress():
         "Fetching foreign-key metadata...",
         "Found 0 foreign-key relationship(s).",
         "Preparing 1 table(s)...",
+        "Fetching columns (0/1)...",
+        "Fetched columns (1/1): ORDERS",
     ]
 
 
-def test_build_data_model_graph_reuses_columns_in_table_metadata():
-    class PreloadedTable:
+def test_build_data_model_graph_prefers_complete_columns_endpoint_over_partial_metadata():
+    class TableWithPartialEmbeddedColumns:
         id = "table-id"
         name = "ORDERS"
         alias = None
@@ -150,10 +152,29 @@ def test_build_data_model_graph_reuses_columns_in_table_metadata():
         columns = [Column("ID", "INTEGER", primary_key=True)]
 
         def get_columns(self):
-            raise AssertionError("get_columns() should not be called for preloaded metadata")
+            return [
+                Column("ID", "INTEGER", primary_key=True),
+                Column("MaterialName", "STRING"),
+            ]
 
-    model = DataModel("model-id", "Sales", [PreloadedTable()], [])
+    model = DataModel("model-id", "Sales", [TableWithPartialEmbeddedColumns()], [])
     graph = build_data_model_graph(model)
+
+    assert graph.tables[0].columns == [
+        {"name": "ID", "type": "INTEGER", "primary_key": True},
+        {"name": "MaterialName", "type": "STRING", "primary_key": False},
+    ]
+
+
+def test_build_data_model_graph_uses_embedded_columns_without_endpoint():
+    class MetadataOnlyTable:
+        id = "table-id"
+        name = "ORDERS"
+        alias = None
+        primary_keys = ["ID"]
+        columns = [Column("ID", "INTEGER", primary_key=True)]
+
+    graph = build_data_model_graph(DataModel("model-id", "Sales", [MetadataOnlyTable()], []))
 
     assert graph.tables[0].columns == [
         {"name": "ID", "type": "INTEGER", "primary_key": True}
@@ -289,6 +310,73 @@ def test_status_line_rewrites_one_line_for_interactive_stream():
     ]
     assert console.status_instance.started
     assert console.status_instance.stopped
+
+
+def test_status_line_reports_column_progress_with_eta_fallback():
+    from io import StringIO
+    from rich.console import Console
+
+    stream = StringIO()
+    status = _StatusLine(Console(file=stream, force_terminal=False))
+    status.start_columns(4)
+    status.update_columns(2, "MATERIAL")
+    status.finish_columns()
+
+    output = stream.getvalue()
+    assert "Fetching columns (0/4)" in output
+    assert "Fetched columns (2/4): MATERIAL" in output
+    assert "ETA" in output
+
+
+def test_status_line_uses_rich_progress_for_terminal_column_fetches():
+    class FakeProgress:
+        def __init__(self):
+            self.started = False
+            self.stopped = False
+            self.updates = []
+
+        def add_task(self, *_args, **_kwargs):
+            return 1
+
+        def start(self):
+            self.started = True
+
+        def update(self, task_id, **kwargs):
+            self.updates.append((task_id, kwargs))
+
+        def stop(self):
+            self.stopped = True
+
+    class FakeConsole:
+        is_terminal = True
+
+    from unittest.mock import patch
+
+    fake_progress = FakeProgress()
+    with patch("erd_celonis.cli.Progress", return_value=fake_progress):
+        status = _StatusLine(FakeConsole())
+        status.start_columns(3)
+        status.update_columns(1, "MATERIAL")
+        status.finish_columns()
+
+    assert fake_progress.started
+    assert fake_progress.updates == [
+        (1, {"completed": 1, "description": "[erd-celonis] Fetching columns: MATERIAL"})
+    ]
+    assert fake_progress.stopped
+
+
+def test_status_line_is_callable_for_erd_progress_callbacks():
+    class FakeConsole:
+        is_terminal = False
+
+        def print(self, *_args, **_kwargs):
+            pass
+
+    status = _StatusLine(FakeConsole())
+
+    assert callable(status)
+    status("Loading...")
 
 
 def test_dotenv_search_uses_the_command_working_directory(tmp_path, monkeypatch):

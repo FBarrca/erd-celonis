@@ -76,9 +76,11 @@ uv run erd-celonis "<data-pool-id>" "<data-model-id>" \
 Use `--include_columns=False` when only the table-level relationship graph is
 needed. The CLI prints progress for authentication, Celonis metadata calls,
 column fetching, and rendering. When Pycelonis includes columns in the table
-metadata response, they are reused without another request. Only tables
-without embedded columns call the table-column endpoint. Fire also exposes
-the command help with `erd-celonis --help`.
+metadata response, the complete table-column endpoint is still used because
+the embedded `columns` attribute can be partial. Fire also exposes the command
+help with `erd-celonis --help`. Complete column metadata is fetched in parallel
+with a bounded pool of workers, and the live progress line reports completed
+tables out of the total, elapsed time, and estimated remaining time.
 
 ## Tests
 

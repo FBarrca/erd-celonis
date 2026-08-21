@@ -12,6 +12,7 @@ caller import the package without creating a Celonis connection.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import html
 import warnings
 from dataclasses import dataclass, field
@@ -414,13 +415,21 @@ def _build_graph(
     table_primary_keys: dict[str, set[str]] = {}
 
     _report(progress, f"Preparing {len(table_items)} table(s)...")
-    table_iterator: Iterable[Any] = table_items
-
-    for table in table_iterator:
+    table_records: list[tuple[Any, str, str, str]] = []
+    for table in table_items:
         table_id = _identifier(table, "table")
         node_id = f"table:{table_id}"
         table_nodes[table_id] = node_id
-        columns = _table_columns(table, include_columns=include_columns, progress=progress)
+        table_records.append((table, table_id, node_id, _display_table_name(table)))
+
+    columns_by_node = _fetch_table_columns_parallel(
+        table_records,
+        include_columns=include_columns,
+        progress=progress,
+    )
+
+    for table, _table_id, node_id, _display_name in table_records:
+        columns = columns_by_node[node_id]
         primary_keys = _primary_keys(table, columns)
         display_name = _display_table_name(table)
         table_primary_keys[node_id] = {key.casefold() for key in primary_keys}
@@ -474,26 +483,93 @@ def _build_graph(
     return graph
 
 
+def _fetch_table_columns_parallel(
+    table_records: Sequence[tuple[Any, str, str, str]],
+    *,
+    include_columns: bool,
+    progress: Callable[[str], None] | None,
+    max_workers: int = 16,
+) -> dict[str, list[dict[str, Any]]]:
+    """Fetch table columns concurrently while preserving deterministic output order."""
+
+    columns_by_node = {node_id: [] for _table, _table_id, node_id, _display_name in table_records}
+    if not include_columns or not table_records:
+        return columns_by_node
+
+    total = len(table_records)
+    _columns_started(progress, total)
+    worker_count = min(max_workers, total)
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="erd-columns") as executor:
+        futures = {
+            executor.submit(_table_columns, table, include_columns=True, progress=None): (table_name, node_id)
+            for table, _table_id, node_id, table_name in table_records
+        }
+        completed = 0
+        for future in as_completed(futures):
+            table_name, node_id = futures[future]
+            columns_by_node[node_id] = future.result()
+            completed += 1
+            _columns_updated(progress, completed, total, table_name)
+
+    _columns_finished(progress)
+    return columns_by_node
+
+
+def _columns_started(progress: Callable[[str], None] | None, total: int) -> None:
+    """Notify a rich-aware reporter that concurrent column work started."""
+
+    method = getattr(progress, "start_columns", None)
+    if callable(method):
+        method(total)
+    else:
+        _report(progress, f"Fetching columns (0/{total})...")
+
+
+def _columns_updated(
+    progress: Callable[[str], None] | None,
+    completed: int,
+    total: int,
+    table_name: str,
+) -> None:
+    """Notify a rich-aware reporter about one completed column request."""
+
+    method = getattr(progress, "update_columns", None)
+    if callable(method):
+        method(completed, table_name)
+    else:
+        _report(progress, f"Fetched columns ({completed}/{total}): {table_name}")
+
+
+def _columns_finished(progress: Callable[[str], None] | None) -> None:
+    """Close a rich-aware column progress display."""
+
+    method = getattr(progress, "finish_columns", None)
+    if callable(method):
+        method()
+
+
 def _table_columns(
     table: Any,
     *,
     include_columns: bool,
     progress: Callable[[str], None] | None,
 ) -> list[dict[str, Any]]:
-    """Use embedded columns first and call the API only when they are absent."""
+    """Load complete columns, using embedded metadata only as a fallback.
+
+    Pycelonis exposes ``table.columns`` as partial information and emits a
+    warning when it is accessed. ``get_columns()`` calls the table-column
+    endpoint and returns the complete schema, so it must be preferred even
+    when the table object already has an embedded ``columns`` attribute.
+    """
 
     if not include_columns:
         return []
-    columns = getattr(table, "columns", None)
-    if columns is not None:
-        return _normalise_columns(column for column in columns if column is not None)
-
     method = getattr(table, "get_columns", None)
-    if not callable(method):
-        return []
-    if progress is not None:
-        _report(progress, f"Fetching columns for {_display_table_name(table)}...")
-    return _normalise_columns(method() or [])
+    if callable(method):
+        return _normalise_columns(method() or [])
+
+    columns = getattr(table, "columns", None)
+    return _normalise_columns(column for column in (columns or []) if column is not None)
 
 
 def _report(progress: Callable[[str], None] | None, message: str) -> None:
