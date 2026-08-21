@@ -1,10 +1,17 @@
 # Celonis data-pool ERD
 
 This project creates an Entity Relationship Diagram from Celonis Data
-Integration metadata with Pycelonis and NetworkX. Each data-model table is a
-graph node. Its columns and primary keys are shown inside the node, and each
-configured Celonis foreign key is a directed edge labeled with its source and
-target columns.
+Integration metadata with Pycelonis. A small typed internal model stores the
+tables and relationships, while Graphviz renders schema-style table cards with
+column ports and routed foreign-key relationships. Each data-model table shows its
+columns and primary keys, and each configured Celonis foreign key is rendered
+with its source and target columns. Relationships show the conventional
+foreign-key cardinality with crow-foot notation, without adding cardinality
+text to the connector. Source columns participating in a foreign key are
+marked `FK`; a column that is both a primary key and foreign key is marked
+`PK/FK`. Relationship direction is normalized from primary-key metadata, so
+if Celonis returns the table pair reversed, the non-primary column is still
+shown and marked as the FK column.
 
 
 
@@ -27,13 +34,27 @@ cp .env.example .env
 ```
 
 The template contains `CELONIS_URL`, `OAUTH_CLIENT_ID`,
-`OAUTH_CLIENT_SECRET`, and `OAUTH_SCOPES`. The CLI searches for `.env` from the
-directory where you run the command, including its parent directories. If
-your tenant uses an API token instead, replace the OAuth settings with
+`OAUTH_CLIENT_SECRET`, `OAUTH_SCOPES`, and `CELONIS_KEY_TYPE`. The CLI searches
+for `.env` from the directory where you run the command, including its parent
+directories. `USER_KEY` is the default and uses the Bearer authorization
+scheme; set `CELONIS_KEY_TYPE=APP_KEY` when using an application key. If your
+tenant uses an API token instead, replace the OAuth settings with
 `CELONIS_API_TOKEN` as supported by Pycelonis.
 
 For development inside this repository, `uv sync` and `uv run erd-celonis`
-remain available.
+remain available. In an interactive terminal, the CLI updates one status line
+in place; when output is redirected, it falls back to one status message per
+line. Rich provides the terminal display, while `tqdm` is only retained as a
+transitive dependency of Pycelonis and is not used by this project.
+
+Graphviz also needs its native `dot` executable. On macOS, install it with:
+
+```bash
+brew install graphviz
+```
+
+On Linux, install the `graphviz` package through your distribution's package
+manager.
 
 ## Generate an ERD
 
@@ -58,9 +79,6 @@ column fetching, and rendering. When Pycelonis includes columns in the table
 metadata response, they are reused without another request. Only tables
 without embedded columns call the table-column endpoint. Fire also exposes
 the command help with `erd-celonis --help`.
-
-Relationships are taken from Celonis' configured foreign keys. The tool does
-not infer relationships merely because two columns have the same name.
 
 ## Tests
 

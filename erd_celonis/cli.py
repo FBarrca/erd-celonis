@@ -6,7 +6,8 @@ import os
 from pathlib import Path
 
 from fire import Fire
-from tqdm.auto import tqdm
+from rich.console import Console
+from rich.status import Status
 
 from .erd import build_data_pool_graph, render_erd
 
@@ -17,6 +18,34 @@ def _configured_key_type(key_type: str | None) -> str:
     return key_type or os.getenv("CELONIS_KEY_TYPE") or "USER_KEY"
 
 
+class _StatusLine:
+    """Display progress with Rich's live one-line status renderer."""
+
+    def __init__(self, console: Console | None = None) -> None:
+        self.console = console or Console()
+        self._status: Status | None = None
+
+    def report(self, message: str) -> None:
+        """Update the live status or print a fallback line when redirected."""
+
+        text = f"[erd-celonis] {message}"
+        if self.console.is_terminal:
+            if self._status is None:
+                self._status = self.console.status(text, spinner="dots", spinner_style="green")
+                self._status.start()
+            else:
+                self._status.update(text)
+        else:
+            self.console.print(text, markup=False)
+
+    def close(self) -> None:
+        """Stop Rich's live display so subsequent output starts on a new line."""
+
+        if self._status is not None:
+            self._status.stop()
+            self._status = None
+
+
 def erd(
     pool_id: str,
     data_model_id: str | None = None,
@@ -24,7 +53,7 @@ def erd(
     include_columns: bool = True,
     key_type: str | None = None,
 ) -> Path:
-    """Render a NetworkX ERD from a Celonis data pool.
+    """Render an ERD from a Celonis data pool.
 
     Args:
         pool_id: Celonis data pool ID.
@@ -41,41 +70,45 @@ def erd(
         The path of the generated ERD image.
     """
 
-    def report(message: str) -> None:
-        tqdm.write(f"[erd-celonis] {message}")
+    status = _StatusLine()
+    report = status.report
 
-    report("Loading environment configuration...")
+    try:
+        report("Loading environment configuration...")
 
-    # Import lazily so importing the CLI does not create a network connection.
-    from dotenv import find_dotenv, load_dotenv
-    from pycelonis import get_celonis
+        # Import lazily so importing the CLI does not create a network connection.
+        from dotenv import find_dotenv, load_dotenv
+        from pycelonis import get_celonis
 
-    dotenv_path = find_dotenv(usecwd=True)
-    if dotenv_path:
-        report(f"Loading environment from {dotenv_path}")
-    else:
-        report("No .env file found; using existing shell environment variables.")
-    load_dotenv(dotenv_path)
-    configured_key_type = _configured_key_type(key_type)
+        dotenv_path = find_dotenv(usecwd=True)
+        if dotenv_path:
+            report(f"Loading environment from {dotenv_path}")
+        else:
+            report("No .env file found; using existing shell environment variables.")
+        load_dotenv(dotenv_path)
+        configured_key_type = _configured_key_type(key_type)
 
-    report("Connecting to Celonis...")
-    celonis = get_celonis(key_type=configured_key_type, check_if_outdated=False)
-    report(f"Loading data pool {pool_id}...")
-    data_pool = celonis.data_integration.get_data_pool(pool_id)
-    if data_model_id:
-        selected_data_model_id = data_model_id
-    else:
-        report("Finding the first data model...")
-        selected_data_model_id = first_data_model_id(data_pool)
-    report(f"Using data model {selected_data_model_id}.")
-    graph = build_data_pool_graph(
-        data_pool,
-        data_model_id=selected_data_model_id,
-        include_columns=include_columns,
-        progress=report,
-    )
-    report("Rendering ERD...")
-    output_path = render_erd(graph, output, progress=report)
+        report("Connecting to Celonis...")
+        celonis = get_celonis(key_type=configured_key_type, check_if_outdated=False)
+        report(f"Loading data pool {pool_id}...")
+        data_pool = celonis.data_integration.get_data_pool(pool_id)
+        if data_model_id:
+            selected_data_model_id = data_model_id
+        else:
+            report("Finding the first data model...")
+            selected_data_model_id = first_data_model_id(data_pool)
+        report(f"Using data model {selected_data_model_id}.")
+        graph = build_data_pool_graph(
+            data_pool,
+            data_model_id=selected_data_model_id,
+            include_columns=include_columns,
+            progress=report,
+        )
+        report("Rendering ERD...")
+        output_path = render_erd(graph, output, progress=report)
+    finally:
+        status.close()
+
     print(f"Created {output_path} ({graph.number_of_nodes()} tables, {graph.number_of_edges()} relationships).")
     return output_path
 

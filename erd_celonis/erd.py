@@ -1,9 +1,9 @@
-"""NetworkX ERD helpers for Pycelonis data models.
+"""ERD helpers for Pycelonis data models.
 
-The graph deliberately contains one node per data-model table.  Columns are
-stored on the table node and rendered inside the table label, while each
-configured Celonis foreign key is represented by a directed edge containing
-the source/target column mapping.
+The data model is represented with small typed containers rather than a graph
+library. Each table contains its columns, while each configured Celonis
+foreign key is represented by a relationship containing the source/target
+column mapping.
 
 This module does not import :mod:`pycelonis` at import time.  That keeps the
 graph-building functions easy to test with small metadata doubles and lets a
@@ -12,14 +12,57 @@ caller import the package without creating a Celonis connection.
 
 from __future__ import annotations
 
-import logging
+import html
 import warnings
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
-import networkx as nx
 
-logger = logging.getLogger(__name__)
+@dataclass
+class TableNode:
+    """A table and the metadata needed to render it."""
+
+    id: str
+    table_id: Any
+    name: Any
+    alias: Any
+    primary_keys: list[str]
+    columns: list[dict[str, Any]]
+    namespace: str
+    data_model_id: Any = None
+    data_model_name: Any = None
+
+
+@dataclass
+class Relationship:
+    """A configured foreign-key relationship between two table nodes."""
+
+    source: str
+    target: str
+    key: str
+    foreign_key_id: Any
+    columns: list[tuple[str, str]]
+    label: str
+
+
+@dataclass
+class ERDGraph:
+    """A lightweight ERD model consumed by the Graphviz renderer."""
+
+    tables: list[TableNode] = field(default_factory=list)
+    relationships: list[Relationship] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def number_of_nodes(self) -> int:
+        """Return the number of tables, preserving the old graph API helper."""
+
+        return len(self.tables)
+
+    def number_of_edges(self) -> int:
+        """Return the number of configured relationships."""
+
+        return len(self.relationships)
 
 
 def build_data_model_graph(
@@ -27,7 +70,7 @@ def build_data_model_graph(
     *,
     include_columns: bool = True,
     progress: Callable[[str], None] | None = None,
-) -> nx.MultiDiGraph:
+) -> ERDGraph:
     """Build an ERD graph for one Pycelonis ``DataModel``.
 
     Args:
@@ -40,7 +83,7 @@ def build_data_model_graph(
         progress: Optional callback for status messages.
 
     Returns:
-        A ``networkx.MultiDiGraph`` with table nodes and foreign-key edges.
+        An :class:`ERDGraph` containing tables and foreign-key relationships.
 
     Notes:
         Relationships are read from Celonis foreign-key metadata; columns with
@@ -71,7 +114,7 @@ def build_data_pool_graph(
     data_model_id: str | None = None,
     include_columns: bool = True,
     progress: Callable[[str], None] | None = None,
-) -> nx.MultiDiGraph:
+) -> ERDGraph:
     """Build one ERD graph from one data pool.
 
     If ``data_model_id`` is supplied, only that model is included.  Otherwise
@@ -90,9 +133,13 @@ def build_data_pool_graph(
         data_models = _collection(data_pool, "get_data_models", "data_models")
     _report(progress, f"Processing {len(data_models)} data model(s)...")
 
-    graph = nx.MultiDiGraph(graph_type="celonis_data_pool_erd")
-    graph.graph["data_pool_id"] = _value(data_pool, "id")
-    graph.graph["data_pool_name"] = _value(data_pool, "name")
+    graph = ERDGraph(
+        metadata={
+            "data_pool_id": _value(data_pool, "id"),
+            "data_pool_name": _value(data_pool, "name"),
+            "graph_type": "celonis_data_pool_erd",
+        }
+    )
 
     for model in data_models:
         model_graph = build_data_model_graph(
@@ -101,21 +148,40 @@ def build_data_pool_graph(
             progress=progress,
         )
         namespace = _model_namespace(model)
-        for node, attrs in model_graph.nodes(data=True):
-            graph.add_node(
-                f"{namespace}/{node}",
-                **attrs,
-                data_model_id=_value(model, "id"),
-                data_model_name=_value(model, "name"),
+        node_ids: dict[str, str] = {}
+        for table in model_graph.tables:
+            namespaced_id = f"{namespace}/{table.id}"
+            node_ids[table.id] = namespaced_id
+            graph.tables.append(
+                TableNode(
+                    id=namespaced_id,
+                    table_id=table.table_id,
+                    name=table.name,
+                    alias=table.alias,
+                    primary_keys=table.primary_keys,
+                    columns=table.columns,
+                    namespace=table.namespace,
+                    data_model_id=_value(model, "id"),
+                    data_model_name=_value(model, "name"),
+                )
             )
-        for source, target, key, attrs in model_graph.edges(keys=True, data=True):
-            graph.add_edge(f"{namespace}/{source}", f"{namespace}/{target}", key=key, **attrs)
+        graph.relationships.extend(
+            Relationship(
+                source=node_ids[relationship.source],
+                target=node_ids[relationship.target],
+                key=relationship.key,
+                foreign_key_id=relationship.foreign_key_id,
+                columns=relationship.columns,
+                label=relationship.label,
+            )
+            for relationship in model_graph.relationships
+        )
 
     return graph
 
 
 def render_erd(
-    graph: nx.MultiDiGraph,
+    graph: ERDGraph,
     output_path: str | Path,
     *,
     title: str | None = None,
@@ -123,97 +189,208 @@ def render_erd(
     dpi: int = 180,
     progress: Callable[[str], None] | None = None,
 ) -> Path:
-    """Render a NetworkX ERD graph to a PNG/SVG/PDF image.
+    """Render an ERD model with Graphviz.
 
-    Matplotlib is imported lazily so graph construction does not require the
+    Graphviz is imported lazily so graph construction does not require the
     rendering dependency.  The output format is selected by the extension.
+    The Graphviz ``dot`` executable must be installed separately on the host.
     """
 
     if not graph.number_of_nodes():
         raise ValueError("Cannot render an ERD with no data-model tables.")
 
-    _report(progress, "Preparing diagram layout...")
+    output = Path(output_path)
+    output_format = output.suffix.lower().lstrip(".")
+    if output_format not in {"png", "svg", "pdf"}:
+        raise ValueError("ERD output must use a .png, .svg, or .pdf extension.")
 
     try:
-        import matplotlib
-
-        matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
+        from graphviz.backend.execute import CalledProcessError, ExecutableNotFound
     except ImportError as exc:  # pragma: no cover - depends on environment
         raise RuntimeError(
-            "Rendering an ERD requires matplotlib. Install the project dependencies "
+            "Rendering an ERD requires the graphviz Python package. Install the project dependencies "
             "with `uv sync`."
         ) from exc
 
-    output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
-
-    # A spring layout works for arbitrary FK topologies and remains useful for
-    # data models that do not have a single root table.
-    layout_graph = nx.Graph(graph)
-    positions = nx.spring_layout(layout_graph, seed=seed, k=1.8 / max(graph.number_of_nodes() ** 0.5, 1))
-    figure_width = max(10.0, min(24.0, 7.0 + 1.5 * graph.number_of_nodes()))
-    figure_height = max(7.0, min(18.0, 5.5 + 1.0 * graph.number_of_nodes()))
-    figure, axis = plt.subplots(figsize=(figure_width, figure_height), constrained_layout=True)
-
-    nx.draw_networkx_edges(
-        graph,
-        positions,
-        ax=axis,
-        arrows=True,
-        arrowstyle="-|>",
-        arrowsize=16,
-        edge_color="#64748b",
-        connectionstyle="arc3,rad=0.08",
-        min_source_margin=18,
-        min_target_margin=18,
-    )
-    nx.draw_networkx_nodes(
-        graph,
-        positions,
-        ax=axis,
-        node_shape="s",
-        node_size=5200,
-        node_color="#fff7ed",
-        edgecolors="#c2410c",
-        linewidths=1.5,
-    )
-    nx.draw_networkx_labels(
-        graph,
-        positions,
-        labels={node: attrs.get("label", str(node)) for node, attrs in graph.nodes(data=True)},
-        ax=axis,
-        font_size=8,
-        font_color="#1e293b",
-        verticalalignment="center",
-        horizontalalignment="center",
-    )
-
-    # Combine parallel edge labels by endpoint so MultiDiGraph relationships
-    # remain readable without relying on Graphviz.
-    edge_label_groups: dict[tuple[str, str], list[str]] = {}
-    for source, target, attrs in graph.edges(data=True):
-        label = str(attrs.get("label", ""))
-        if label:
-            edge_label_groups.setdefault((source, target), []).append(label)
-    nx.draw_networkx_edge_labels(
-        graph,
-        positions,
-        edge_labels={key: "\n".join(labels) for key, labels in edge_label_groups.items()},
-        ax=axis,
-        font_size=7,
-        font_color="#334155",
-        label_pos=0.5,
-        rotate=False,
-        bbox={"alpha": 0.8, "color": "white", "pad": 0.2, "lw": 0},
-    )
-
-    axis.set_title(title or _default_title(graph), fontsize=14, color="#0f172a", pad=18)
-    axis.axis("off")
+    _report(progress, "Preparing Graphviz diagram layout...")
+    dot = _graphviz_diagram(graph, title=title, seed=seed, dpi=dpi)
     _report(progress, f"Writing ERD to {output}...")
-    figure.savefig(output, dpi=dpi, bbox_inches="tight")
-    plt.close(figure)
+
+    try:
+        output.write_bytes(dot.pipe(format=output_format))
+    except ExecutableNotFound as exc:  # pragma: no cover - depends on host setup
+        raise RuntimeError(
+            "Rendering an ERD requires the Graphviz `dot` executable. "
+            "Install Graphviz with `brew install graphviz` (macOS) or your "
+            "system package manager, then retry."
+        ) from exc
+    except CalledProcessError as exc:  # pragma: no cover - depends on Graphviz output
+        raise RuntimeError(f"Graphviz failed to render the ERD: {exc}") from exc
     return output
+
+
+def _graphviz_diagram(
+    graph: ERDGraph,
+    *,
+    title: str | None,
+    seed: int,
+    dpi: int = 180,
+):
+    """Build a Graphviz diagram with schema-style table nodes.
+
+    ``seed`` is retained in the renderer API for compatibility.  The DOT
+    layout is deterministic for a given Graphviz version, so Graphviz—not a
+    force-directed layout—now controls the placement.
+    """
+
+    del seed
+    from graphviz import Digraph
+
+    dot = Digraph(name="celonis_erd", engine="dot", format="png")
+    dot.attr(
+        "graph",
+        rankdir="TB",
+        splines="ortho",
+        nodesep="0.65",
+        ranksep="0.9",
+        pad="0.25",
+        bgcolor="white",
+        outputorder="edgesfirst",
+        labelloc="t",
+        label=title or _default_title(graph),
+        dpi=str(dpi),
+        fontname="Arial",
+        fontsize="18",
+        fontcolor="#202124",
+    )
+    dot.attr("node", shape="plain", margin="0")
+    dot.attr(
+        "edge",
+        color="#68736A",
+        penwidth="1.0",
+        arrowsize="0.7",
+        fontname="Arial",
+        fontsize="8",
+        fontcolor="#4B5563",
+    )
+
+    dot_nodes = {table.id: f"n{index}" for index, table in enumerate(graph.tables)}
+    port_maps: dict[str, dict[str, str]] = {}
+    foreign_key_columns: dict[str, set[str]] = {table.id: set() for table in graph.tables}
+    for relationship in graph.relationships:
+        foreign_key_columns[relationship.source].update(
+            str(source_column).casefold()
+            for source_column, _target_column in relationship.columns
+        )
+
+    for table in graph.tables:
+        columns = table.columns
+        port_maps[table.id] = _column_port_map(columns)
+        dot.node(
+            dot_nodes[table.id],
+            label=_html_table_label(
+                str(table.alias or table.name or table.id),
+                columns,
+                table.primary_keys,
+                port_maps[table.id],
+                foreign_key_columns[table.id],
+            ),
+        )
+
+    for relationship in graph.relationships:
+        edge_attrs: dict[str, str] = {
+            "dir": "both",
+            # A Celonis FK conventionally describes zero or more source rows
+            # referencing one target row.  Graphviz's compound arrow shapes
+            # make those cardinalities visible as crow-foot notation without
+            # adding noisy cardinality text to the connector.
+            "arrowtail": "crowodot",
+            "arrowhead": "teetee",
+        }
+        relationship_label = relationship.label
+        if relationship_label:
+            # Graphviz's orthogonal router does not support ordinary edge
+            # labels reliably.  An xlabel keeps the relationship text while
+            # allowing the connector itself to remain orthogonal.
+            edge_attrs.update(xlabel=relationship_label)
+
+        columns = relationship.columns
+        if columns:
+            source_column, target_column = columns[0]
+            source_port = _lookup_port(port_maps.get(relationship.source, {}), source_column)
+            target_port = _lookup_port(port_maps.get(relationship.target, {}), target_column)
+            if source_port:
+                edge_attrs["tailport"] = source_port
+            if target_port:
+                edge_attrs["headport"] = target_port
+
+        dot.edge(dot_nodes[relationship.source], dot_nodes[relationship.target], **edge_attrs)
+
+    return dot
+
+
+def _column_port_map(columns: Sequence[Mapping[str, Any]]) -> dict[str, str]:
+    """Return stable Graphviz port names for a table's columns."""
+
+    return {str(column["name"]): f"column_{index}" for index, column in enumerate(columns)}
+
+
+def _lookup_port(ports: Mapping[str, str], column_name: Any) -> str | None:
+    """Find a column port, allowing metadata casing to differ."""
+
+    name = str(column_name)
+    if name in ports:
+        return ports[name]
+    folded = name.casefold()
+    return next((port for column, port in ports.items() if column.casefold() == folded), None)
+
+
+def _html_table_label(
+    name: str,
+    columns: Sequence[Mapping[str, Any]],
+    primary_keys: Sequence[str],
+    ports: Mapping[str, str],
+    foreign_key_columns: Sequence[str] = (),
+) -> str:
+    """Create a Graphviz HTML label styled as a database table card."""
+
+    primary_key_set = {str(key).casefold() for key in primary_keys}
+    foreign_key_set = {str(key).casefold() for key in foreign_key_columns}
+    rows = [
+        '<TR><TD COLSPAN="3" BGCOLOR="#CBE8A0" ALIGN="LEFT" CELLPADDING="7">'
+        f'<FONT FACE="Arial"><B>{html.escape(name, quote=True)}</B></FONT></TD></TR>'
+    ]
+    for column in columns:
+        column_name = str(column.get("name", ""))
+        column_type = str(column.get("type") or "")
+        key_markers = []
+        if column_name.casefold() in primary_key_set:
+            key_markers.append("PK")
+        if column_name.casefold() in foreign_key_set:
+            key_markers.append("FK")
+        key_marker = "/".join(key_markers)
+        port = ports.get(column_name, "")
+        port_attribute = f' PORT="{html.escape(port, quote=True)}"' if port else ""
+        rows.append(
+            "<TR>"
+            f'<TD ALIGN="LEFT" BGCOLOR="#F5F8EC" CELLPADDING="5">{html.escape(column_type, quote=True)}</TD>'
+            f'<TD ALIGN="LEFT" BGCOLOR="#F5F8EC" CELLPADDING="5"{port_attribute}>'
+            f'{html.escape(column_name, quote=True)}</TD>'
+            f'<TD ALIGN="CENTER" BGCOLOR="#F5F8EC" CELLPADDING="5">{key_marker}</TD>'
+            "</TR>"
+        )
+    if not columns:
+        rows.append(
+            '<TR><TD COLSPAN="3" ALIGN="LEFT" CELLPADDING="5">'
+            '<FONT COLOR="#6B7280">No columns loaded</FONT></TD></TR>'
+        )
+
+    return (
+        '<<TABLE BORDER="1" COLOR="#5C7D4E" CELLBORDER="1" CELLSPACING="0" CELLPADDING="0">'
+        + "".join(rows)
+        + "</TABLE>>"
+    )
 
 
 def _build_graph(
@@ -224,20 +401,20 @@ def _build_graph(
     include_columns: bool,
     namespace: str,
     progress: Callable[[str], None] | None,
-) -> nx.MultiDiGraph:
-    graph = nx.MultiDiGraph(
-        data_model_id=_value(data_model, "id"),
-        data_model_name=_value(data_model, "name"),
-        graph_type="celonis_data_model_erd",
+) -> ERDGraph:
+    graph = ERDGraph(
+        metadata={
+            "data_model_id": _value(data_model, "id"),
+            "data_model_name": _value(data_model, "name"),
+            "graph_type": "celonis_data_model_erd",
+        }
     )
     table_items = [table for table in tables if table is not None]
     table_nodes: dict[str, str] = {}
+    table_primary_keys: dict[str, set[str]] = {}
 
+    _report(progress, f"Preparing {len(table_items)} table(s)...")
     table_iterator: Iterable[Any] = table_items
-    if progress is not None:
-        from tqdm.auto import tqdm
-
-        table_iterator = tqdm(table_items, desc="Preparing tables", unit="table")
 
     for table in table_iterator:
         table_id = _identifier(table, "table")
@@ -246,16 +423,17 @@ def _build_graph(
         columns = _table_columns(table, include_columns=include_columns, progress=progress)
         primary_keys = _primary_keys(table, columns)
         display_name = _display_table_name(table)
-        graph.add_node(
-            node_id,
-            kind="table",
-            table_id=_value(table, "id"),
-            name=_value(table, "name"),
-            alias=_value(table, "alias"),
-            primary_keys=primary_keys,
-            columns=columns,
-            label=_table_label(display_name, columns, primary_keys),
-            namespace=namespace,
+        table_primary_keys[node_id] = {key.casefold() for key in primary_keys}
+        graph.tables.append(
+            TableNode(
+                id=node_id,
+                table_id=_value(table, "id"),
+                name=_value(table, "name"),
+                alias=_value(table, "alias"),
+                primary_keys=primary_keys,
+                columns=columns,
+                namespace=namespace,
+            )
         )
 
     for index, foreign_key in enumerate(foreign_keys):
@@ -274,15 +452,23 @@ def _build_graph(
             continue
 
         columns = _foreign_key_columns(foreign_key)
-        relationship_label = ", ".join(f"{source} → {target}" for source, target in columns)
-        edge_key = _value(foreign_key, "id") or f"foreign-key-{index}"
-        graph.add_edge(
+        source_node, target_node, columns = _orient_relationship(
             source_node,
             target_node,
-            key=str(edge_key),
-            foreign_key_id=_value(foreign_key, "id"),
-            columns=columns,
-            label=relationship_label or "foreign key",
+            columns,
+            table_primary_keys,
+        )
+        relationship_label = ", ".join(f"{source} → {target}" for source, target in columns)
+        edge_key = _value(foreign_key, "id") or f"foreign-key-{index}"
+        graph.relationships.append(
+            Relationship(
+                source=source_node,
+                target=target_node,
+                key=str(edge_key),
+                foreign_key_id=_value(foreign_key, "id"),
+                columns=columns,
+                label=relationship_label or "foreign key",
+            )
         )
 
     return graph
@@ -392,18 +578,35 @@ def _foreign_key_columns(foreign_key: Any) -> list[tuple[str, str]]:
     return pairs
 
 
+def _orient_relationship(
+    source_node: str,
+    target_node: str,
+    columns: list[tuple[str, str]],
+    table_primary_keys: Mapping[str, set[str]],
+) -> tuple[str, str, list[tuple[str, str]]]:
+    """Orient a relationship from the FK column to the referenced column.
+
+    Celonis provides source/target table IDs, but some models expose that
+    pair in the reverse direction relative to the relational FK convention.
+    When one endpoint is a primary key and the other is not, the non-primary
+    endpoint is the FK side. This keeps the FK marker and Graphviz ports
+    aligned with the actual child column (for example ``Vendor_ID``).
+    """
+
+    if not columns:
+        return source_node, target_node, columns
+
+    source_keys = table_primary_keys.get(source_node, set())
+    target_keys = table_primary_keys.get(target_node, set())
+    source_is_primary = all(column.casefold() in source_keys for column, _ in columns)
+    target_is_primary = all(column.casefold() in target_keys for _, column in columns)
+    if source_is_primary and not target_is_primary:
+        return target_node, source_node, [(target, source) for source, target in columns]
+    return source_node, target_node, columns
+
+
 def _display_table_name(table: Any) -> str:
     return str(_value(table, "alias") or _value(table, "name") or _identifier(table, "table"))
-
-
-def _table_label(name: str, columns: Sequence[Mapping[str, Any]], primary_keys: Sequence[str]) -> str:
-    lines = [name]
-    primary_key_set = set(primary_keys)
-    for column in columns:
-        marker = "PK " if column["name"] in primary_key_set else "   "
-        type_name = f" : {column['type']}" if column.get("type") else ""
-        lines.append(f"{marker}{column['name']}{type_name}")
-    return "\n".join(lines)
 
 
 def _enum_value(value: Any) -> str | None:
@@ -412,9 +615,9 @@ def _enum_value(value: Any) -> str | None:
     return str(getattr(value, "value", value))
 
 
-def _default_title(graph: nx.MultiDiGraph) -> str:
-    pool_name = graph.graph.get("data_pool_name")
-    model_name = graph.graph.get("data_model_name")
+def _default_title(graph: ERDGraph) -> str:
+    pool_name = graph.metadata.get("data_pool_name")
+    model_name = graph.metadata.get("data_model_name")
     if pool_name and model_name:
         return f"{pool_name} / {model_name} ERD"
     if pool_name:
