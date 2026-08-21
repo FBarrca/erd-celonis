@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 from fire import Fire
@@ -10,11 +11,18 @@ from tqdm.auto import tqdm
 from .erd import build_data_pool_graph, render_erd
 
 
+def _configured_key_type(key_type: str | None) -> str:
+    """Resolve the explicit Pycelonis token type used by the CLI."""
+
+    return key_type or os.getenv("CELONIS_KEY_TYPE") or "USER_KEY"
+
+
 def erd(
     pool_id: str,
     data_model_id: str | None = None,
     output: str | Path = "datapool_erd.png",
     include_columns: bool = True,
+    key_type: str | None = None,
 ) -> Path:
     """Render a NetworkX ERD from a Celonis data pool.
 
@@ -24,6 +32,10 @@ def erd(
             model in the pool is used.
         output: Output image path. The extension selects PNG, SVG, or PDF.
         include_columns: Fetch and render table columns when true.
+        key_type: Celonis token type, such as ``USER_KEY`` or ``APP_KEY``.
+            If omitted, ``CELONIS_KEY_TYPE`` is read from the environment and
+            defaults to ``USER_KEY``.  Setting this explicitly avoids
+            Pycelonis probing both token types during authentication.
 
     Returns:
         The path of the generated ERD image.
@@ -44,9 +56,10 @@ def erd(
     else:
         report("No .env file found; using existing shell environment variables.")
     load_dotenv(dotenv_path)
+    configured_key_type = _configured_key_type(key_type)
 
     report("Connecting to Celonis...")
-    celonis = get_celonis(check_if_outdated=False)
+    celonis = get_celonis(key_type=configured_key_type, check_if_outdated=False)
     report(f"Loading data pool {pool_id}...")
     data_pool = celonis.data_integration.get_data_pool(pool_id)
     if data_model_id:
