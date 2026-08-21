@@ -1,7 +1,7 @@
 [project]
 name = "erd-celonis"
-version = "0.1.1"
-description = "Generate entity-relationship diagrams from Celonis data models"
+version = "0.3.0"
+description = "Explore interactive entity-relationship diagrams from Celonis data models"
 readme = "README.md"
 requires-python = ">=3.13"
 
@@ -24,6 +24,16 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["erd_celonis"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "/erd_celonis",
+    "/frontend",
+    "/tests",
+    "/README.md",
+    "/pyproject.toml",
+    "/uv.lock",
+]
 
 [dependency-groups]
 dev = [

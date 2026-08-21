@@ -49,7 +49,7 @@ class Relationship:
 
 @dataclass
 class ERDGraph:
-    """A lightweight ERD model consumed by the Graphviz renderer."""
+    """A lightweight ERD model consumed by the web and Graphviz renderers."""
 
     tables: list[TableNode] = field(default_factory=list)
     relationships: list[Relationship] = field(default_factory=list)
@@ -170,7 +170,7 @@ def build_data_pool_graph(
             Relationship(
                 source=node_ids[relationship.source],
                 target=node_ids[relationship.target],
-                key=relationship.key,
+                key=f"{namespace}/{relationship.key}",
                 foreign_key_id=relationship.foreign_key_id,
                 columns=relationship.columns,
                 label=relationship.label,

@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 import time
-from pathlib import Path
-
 from fire import Fire
 from rich.console import Console
 from rich.progress import (
@@ -18,7 +16,8 @@ from rich.progress import (
 )
 from rich.status import Status
 
-from .erd import build_data_pool_graph, render_erd
+from .erd import build_data_pool_graph
+from .web import serve_graph
 
 
 def _configured_key_type(key_type: str | None) -> str:
@@ -128,25 +127,26 @@ class _StatusLine:
 def erd(
     pool_id: str,
     data_model_id: str | None = None,
-    output: str | Path = "datapool_erd.png",
     include_columns: bool = True,
     key_type: str | None = None,
-) -> Path:
-    """Render an ERD from a Celonis data pool.
+    host: str = "127.0.0.1",
+    port: int = 8000,
+    open_browser: bool = True,
+) -> None:
+    """Serve an interactive ERD from a Celonis data pool.
 
     Args:
         pool_id: Celonis data pool ID.
         data_model_id: Optional data model ID. If omitted, the first data
             model in the pool is used.
-        output: Output image path. The extension selects PNG, SVG, or PDF.
         include_columns: Fetch and render table columns when true.
         key_type: Celonis token type, such as ``USER_KEY`` or ``APP_KEY``.
             If omitted, ``CELONIS_KEY_TYPE`` is read from the environment and
             defaults to ``USER_KEY``.  Setting this explicitly avoids
             Pycelonis probing both token types during authentication.
-
-    Returns:
-        The path of the generated ERD image.
+        host: Address on which to serve the explorer. Defaults to local-only.
+        port: HTTP port. Use 0 to select an available port automatically.
+        open_browser: Open the explorer in the default browser when ready.
     """
 
     status = _StatusLine()
@@ -185,13 +185,12 @@ def erd(
             include_columns=include_columns,
             progress=report,
         )
-        report("Rendering ERD...")
-        output_path = render_erd(graph, output, progress=report)
+        report("Preparing interactive explorer...")
     finally:
         status.close()
 
-    print(f"Created {output_path} ({graph.number_of_nodes()} tables, {graph.number_of_edges()} relationships).")
-    return output_path
+    print(f"Loaded {graph.number_of_nodes()} tables and {graph.number_of_edges()} relationships.")
+    serve_graph(graph, host=host, port=port, open_browser=open_browser)
 
 
 def first_data_model_id(data_pool: object) -> str:
