@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from fire import Fire
+from tqdm.auto import tqdm
 
 from .erd import build_data_pool_graph, render_erd
 
@@ -28,20 +29,40 @@ def erd(
         The path of the generated ERD image.
     """
 
+    def report(message: str) -> None:
+        tqdm.write(f"[erd-celonis] {message}")
+
+    report("Loading environment configuration...")
+
     # Import lazily so importing the CLI does not create a network connection.
     from dotenv import find_dotenv, load_dotenv
     from pycelonis import get_celonis
 
-    load_dotenv(find_dotenv(usecwd=True))
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        report(f"Loading environment from {dotenv_path}")
+    else:
+        report("No .env file found; using existing shell environment variables.")
+    load_dotenv(dotenv_path)
+
+    report("Connecting to Celonis...")
     celonis = get_celonis(check_if_outdated=False)
+    report(f"Loading data pool {pool_id}...")
     data_pool = celonis.data_integration.get_data_pool(pool_id)
-    selected_data_model_id = data_model_id or first_data_model_id(data_pool)
+    if data_model_id:
+        selected_data_model_id = data_model_id
+    else:
+        report("Finding the first data model...")
+        selected_data_model_id = first_data_model_id(data_pool)
+    report(f"Using data model {selected_data_model_id}.")
     graph = build_data_pool_graph(
         data_pool,
         data_model_id=selected_data_model_id,
         include_columns=include_columns,
+        progress=report,
     )
-    output_path = render_erd(graph, output)
+    report("Rendering ERD...")
+    output_path = render_erd(graph, output, progress=report)
     print(f"Created {output_path} ({graph.number_of_nodes()} tables, {graph.number_of_edges()} relationships).")
     return output_path
 

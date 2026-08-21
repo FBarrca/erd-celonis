@@ -15,14 +15,19 @@ from __future__ import annotations
 import logging
 import warnings
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Mapping, Sequence
 
 import networkx as nx
 
 logger = logging.getLogger(__name__)
 
 
-def build_data_model_graph(data_model: Any, *, include_columns: bool = True) -> nx.MultiDiGraph:
+def build_data_model_graph(
+    data_model: Any,
+    *,
+    include_columns: bool = True,
+    progress: Callable[[str], None] | None = None,
+) -> nx.MultiDiGraph:
     """Build an ERD graph for one Pycelonis ``DataModel``.
 
     Args:
@@ -32,6 +37,7 @@ def build_data_model_graph(data_model: Any, *, include_columns: bool = True) -> 
             fallback, which is useful for already-loaded metadata and tests.
         include_columns: If true, fetch table columns and include them in
             table node attributes and labels.
+        progress: Optional callback for status messages.
 
     Returns:
         A ``networkx.MultiDiGraph`` with table nodes and foreign-key edges.
@@ -42,12 +48,20 @@ def build_data_model_graph(data_model: Any, *, include_columns: bool = True) -> 
         configured the foreign key.
     """
 
+    _report(progress, "Fetching table metadata...")
+    tables = _collection(data_model, "get_tables", "tables")
+    _report(progress, f"Found {len(tables)} table(s).")
+    _report(progress, "Fetching foreign-key metadata...")
+    foreign_keys = _collection(data_model, "get_foreign_keys", "foreign_keys")
+    _report(progress, f"Found {len(foreign_keys)} foreign-key relationship(s).")
+
     return _build_graph(
         data_model,
-        tables=_collection(data_model, "get_tables", "tables"),
-        foreign_keys=_collection(data_model, "get_foreign_keys", "foreign_keys"),
+        tables=tables,
+        foreign_keys=foreign_keys,
         include_columns=include_columns,
         namespace=_model_namespace(data_model),
+        progress=progress,
     )
 
 
@@ -56,25 +70,30 @@ def build_data_pool_graph(
     *,
     data_model_id: str | None = None,
     include_columns: bool = True,
+    progress: Callable[[str], None] | None = None,
 ) -> nx.MultiDiGraph:
     """Build one ERD graph from one data pool.
 
     If ``data_model_id`` is supplied, only that model is included.  Otherwise
     all data models in the pool are merged into one graph.  Table node IDs are
     namespaced by data model so similarly named tables remain distinct.
+        progress: Optional callback for status messages.
     """
 
     if data_model_id is not None:
+        _report(progress, f"Loading data model {data_model_id}...")
         data_models = [_call_or_attribute(data_pool, "get_data_model", "data_model", data_model_id)]
     else:
+        _report(progress, "Fetching data-model metadata...")
         data_models = _collection(data_pool, "get_data_models", "data_models")
+    _report(progress, f"Processing {len(data_models)} data model(s)...")
 
     graph = nx.MultiDiGraph(graph_type="celonis_data_pool_erd")
     graph.graph["data_pool_id"] = _value(data_pool, "id")
     graph.graph["data_pool_name"] = _value(data_pool, "name")
 
     for model in data_models:
-        model_graph = build_data_model_graph(model, include_columns=include_columns)
+        model_graph = build_data_model_graph(model, include_columns=include_columns, progress=progress)
         namespace = _model_namespace(model)
         for node, attrs in model_graph.nodes(data=True):
             graph.add_node(
@@ -96,6 +115,7 @@ def render_erd(
     title: str | None = None,
     seed: int = 42,
     dpi: int = 180,
+    progress: Callable[[str], None] | None = None,
 ) -> Path:
     """Render a NetworkX ERD graph to a PNG/SVG/PDF image.
 
@@ -105,6 +125,8 @@ def render_erd(
 
     if not graph.number_of_nodes():
         raise ValueError("Cannot render an ERD with no data-model tables.")
+
+    _report(progress, "Preparing diagram layout...")
 
     try:
         import matplotlib
@@ -182,6 +204,7 @@ def render_erd(
 
     axis.set_title(title or _default_title(graph), fontsize=14, color="#0f172a", pad=18)
     axis.axis("off")
+    _report(progress, f"Writing ERD to {output}...")
     figure.savefig(output, dpi=dpi, bbox_inches="tight")
     plt.close(figure)
     return output
@@ -194,6 +217,7 @@ def _build_graph(
     foreign_keys: Iterable[Any],
     include_columns: bool,
     namespace: str,
+    progress: Callable[[str], None] | None,
 ) -> nx.MultiDiGraph:
     graph = nx.MultiDiGraph(
         data_model_id=_value(data_model, "id"),
@@ -203,7 +227,7 @@ def _build_graph(
     table_items = [table for table in tables if table is not None]
     table_nodes: dict[str, str] = {}
 
-    for table in table_items:
+    for table in _progress_tables(table_items, progress=progress, include_columns=include_columns):
         table_id = _identifier(table, "table")
         node_id = f"table:{table_id}"
         table_nodes[table_id] = node_id
@@ -250,6 +274,26 @@ def _build_graph(
         )
 
     return graph
+
+
+def _progress_tables(
+    tables: list[Any],
+    *,
+    progress: Callable[[str], None] | None,
+    include_columns: bool,
+) -> Iterable[Any]:
+    if progress is None:
+        return tables
+
+    from tqdm.auto import tqdm
+
+    description = "Fetching columns" if include_columns else "Processing tables"
+    return tqdm(tables, desc=description, unit="table")
+
+
+def _report(progress: Callable[[str], None] | None, message: str) -> None:
+    if progress is not None:
+        progress(message)
 
 
 def _collection(obj: Any, method_name: str, attribute_name: str) -> list[Any]:

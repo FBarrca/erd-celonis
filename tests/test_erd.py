@@ -87,6 +87,20 @@ def test_build_data_model_graph_adds_tables_columns_and_relationships():
     assert edge["label"] == "CUSTOMER_ID → CUSTOMER_ID"
 
 
+def test_build_data_model_graph_reports_metadata_progress():
+    model = DataModel("model-id", "Sales", [Table("table-id", "ORDERS")], [])
+    messages = []
+
+    build_data_model_graph(model, progress=messages.append)
+
+    assert messages == [
+        "Fetching table metadata...",
+        "Found 1 table(s).",
+        "Fetching foreign-key metadata...",
+        "Found 0 foreign-key relationship(s).",
+    ]
+
+
 def test_build_data_pool_graph_namespaces_models_and_can_select_one_model():
     model_a = DataModel("model-a", "A", [Table("table-a", "A_TABLE")], [])
     model_b = DataModel("model-b", "B", [Table("table-b", "B_TABLE")], [])

@@ -17,6 +17,7 @@ dependencies = [
     "networkx>=3.6.1",
     "matplotlib>=3.9,<4.0",
     "fire>=0.7.1",
+    "tqdm>=4.66,<5.0",
 ]
 
 [project.scripts]
