@@ -11,6 +11,7 @@ The explorer provides:
   tables above their dependants and spreads each rank across the canvas;
 - drag or two-finger trackpad pan, pinch zoom, minimap, and draggable table cards;
 - search across table and column names;
+- export the loaded data model as a JSON file;
 - table and relationship inspectors with exact column mappings;
 - a relationship lens that fades unrelated parts of the model; and
 - a responsive inspector for desktop and mobile browsers.

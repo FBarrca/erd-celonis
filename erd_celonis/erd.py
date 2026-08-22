@@ -33,6 +33,7 @@ class TableNode:
     namespace: str
     data_model_id: Any = None
     data_model_name: Any = None
+    is_augmented: bool = False
 
 
 @dataclass
@@ -66,6 +67,28 @@ class ERDGraph:
         return len(self.relationships)
 
 
+@dataclass
+class _AugmentedTableMetadata:
+    """Small table adapter for tables returned by the compute schema API."""
+
+    id: Any
+    name: Any
+    columns: list[Any]
+    primary_keys: list[str]
+    alias: Any = None
+    augmentation: bool = True
+
+
+@dataclass
+class _AugmentedForeignKeyMetadata:
+    """Foreign-key adapter for name-based relationships in the compute schema."""
+
+    source_table_id: Any
+    target_table_id: Any
+    columns: list[Any]
+    id: Any = None
+
+
 def build_data_model_graph(
     data_model: Any,
     *,
@@ -75,10 +98,8 @@ def build_data_model_graph(
     """Build an ERD graph for one Pycelonis ``DataModel``.
 
     Args:
-        data_model: A Pycelonis ``DataModel`` object.  The object is expected
-            to expose ``get_tables()`` and ``get_foreign_keys()``.  Its
-            ``tables`` and ``foreign_keys`` attributes are accepted as a
-            fallback, which is useful for already-loaded metadata and tests.
+        data_model: A Pycelonis ``DataModel`` object exposing ``get_tables()``
+            and ``get_foreign_keys()``.
         include_columns: If true, fetch table columns and include them in
             table node attributes and labels.
         progress: Optional callback for status messages.
@@ -92,19 +113,24 @@ def build_data_model_graph(
         configured the foreign key.
     """
 
-    _report(progress, "Fetching table metadata...")
-    tables = _collection(data_model, "get_tables", "tables")
-    _report(progress, f"Found {len(tables)} table(s).")
-    _report(progress, "Fetching foreign-key metadata...")
-    foreign_keys = _collection(data_model, "get_foreign_keys", "foreign_keys")
-    _report(progress, f"Found {len(foreign_keys)} foreign-key relationship(s).")
+    if progress is not None:
+        progress("Fetching table metadata...")
+    tables = data_model.get_tables()
+    if progress is not None:
+        progress(f"Found {len(tables)} table(s).")
+        progress("Fetching foreign-key metadata...")
+    foreign_keys = data_model.get_foreign_keys()
+    tables, augmented_foreign_keys = _include_augmented_schema(data_model, tables, foreign_keys)
+    foreign_keys.extend(augmented_foreign_keys)
+    if progress is not None:
+        progress(f"Found {len(foreign_keys)} foreign-key relationship(s).")
 
     return _build_graph(
         data_model,
         tables=tables,
         foreign_keys=foreign_keys,
         include_columns=include_columns,
-        namespace=_model_namespace(data_model),
+        namespace=str(data_model.id),
         progress=progress,
     )
 
@@ -127,17 +153,20 @@ def build_data_pool_graph(
     """
 
     if data_model_id is not None:
-        _report(progress, f"Loading data model {data_model_id}...")
-        data_models = [_call_or_attribute(data_pool, "get_data_model", "data_model", data_model_id)]
+        if progress is not None:
+            progress(f"Loading data model {data_model_id}...")
+        data_models = [data_pool.get_data_model(data_model_id)]
     else:
-        _report(progress, "Fetching data-model metadata...")
-        data_models = _collection(data_pool, "get_data_models", "data_models")
-    _report(progress, f"Processing {len(data_models)} data model(s)...")
+        if progress is not None:
+            progress("Fetching data-model metadata...")
+        data_models = data_pool.get_data_models()
+    if progress is not None:
+        progress(f"Processing {len(data_models)} data model(s)...")
 
     graph = ERDGraph(
         metadata={
-            "data_pool_id": _value(data_pool, "id"),
-            "data_pool_name": _value(data_pool, "name"),
+            "data_pool_id": data_pool.id,
+            "data_pool_name": data_pool.name,
             "graph_type": "celonis_data_pool_erd",
         }
     )
@@ -148,7 +177,7 @@ def build_data_pool_graph(
             include_columns=include_columns,
             progress=progress,
         )
-        namespace = _model_namespace(model)
+        namespace = str(model.id)
         node_ids: dict[str, str] = {}
         for table in model_graph.tables:
             namespaced_id = f"{namespace}/{table.id}"
@@ -162,8 +191,9 @@ def build_data_pool_graph(
                     primary_keys=table.primary_keys,
                     columns=table.columns,
                     namespace=table.namespace,
-                    data_model_id=_value(model, "id"),
-                    data_model_name=_value(model, "name"),
+                    data_model_id=model.id,
+                    data_model_name=model.name,
+                    is_augmented=table.is_augmented,
                 )
             )
         graph.relationships.extend(
@@ -214,9 +244,11 @@ def render_erd(
         ) from exc
 
     output.parent.mkdir(parents=True, exist_ok=True)
-    _report(progress, "Preparing Graphviz diagram layout...")
+    if progress is not None:
+        progress("Preparing Graphviz diagram layout...")
     dot = _graphviz_diagram(graph, title=title, seed=seed, dpi=dpi)
-    _report(progress, f"Writing ERD to {output}...")
+    if progress is not None:
+        progress(f"Writing ERD to {output}...")
 
     try:
         output.write_bytes(dot.pipe(format=output_format))
@@ -405,8 +437,8 @@ def _build_graph(
 ) -> ERDGraph:
     graph = ERDGraph(
         metadata={
-            "data_model_id": _value(data_model, "id"),
-            "data_model_name": _value(data_model, "name"),
+            "data_model_id": data_model.id,
+            "data_model_name": data_model.name,
             "graph_type": "celonis_data_model_erd",
         }
     )
@@ -414,13 +446,14 @@ def _build_graph(
     table_nodes: dict[str, str] = {}
     table_primary_keys: dict[str, set[str]] = {}
 
-    _report(progress, f"Preparing {len(table_items)} table(s)...")
+    if progress is not None:
+        progress(f"Preparing {len(table_items)} table(s)...")
     table_records: list[tuple[Any, str, str, str]] = []
     for table in table_items:
-        table_id = _identifier(table, "table")
+        table_id = str(table.id)
         node_id = f"table:{table_id}"
         table_nodes[table_id] = node_id
-        table_records.append((table, table_id, node_id, _display_table_name(table)))
+        table_records.append((table, table_id, node_id, str(table.alias or table.name or table.id)))
 
     columns_by_node = _fetch_table_columns_parallel(
         table_records,
@@ -431,25 +464,25 @@ def _build_graph(
     for table, _table_id, node_id, _display_name in table_records:
         columns = columns_by_node[node_id]
         primary_keys = _primary_keys(table, columns)
-        display_name = _display_table_name(table)
         table_primary_keys[node_id] = {key.casefold() for key in primary_keys}
         graph.tables.append(
             TableNode(
                 id=node_id,
-                table_id=_value(table, "id"),
-                name=_value(table, "name"),
-                alias=_value(table, "alias"),
+                table_id=table.id,
+                name=table.name,
+                alias=table.alias,
                 primary_keys=primary_keys,
                 columns=columns,
                 namespace=namespace,
+                is_augmented=bool(getattr(table, "augmentation", False)),
             )
         )
 
     for index, foreign_key in enumerate(foreign_keys):
         if foreign_key is None:
             continue
-        source_id = _value(foreign_key, "source_table_id")
-        target_id = _value(foreign_key, "target_table_id")
+        source_id = foreign_key.source_table_id
+        target_id = foreign_key.target_table_id
         source_node = table_nodes.get(str(source_id)) if source_id is not None else None
         target_node = table_nodes.get(str(target_id)) if target_id is not None else None
         if source_node is None or target_node is None:
@@ -457,7 +490,7 @@ def _build_graph(
                 "Skipping Celonis foreign key %r because its source or target table "
                 "is not present in the data model."
             )
-            warnings.warn(message % _value(foreign_key, "id"), RuntimeWarning, stacklevel=2)
+            warnings.warn(message % getattr(foreign_key, "id", None), RuntimeWarning, stacklevel=2)
             continue
 
         columns = _foreign_key_columns(foreign_key)
@@ -468,19 +501,169 @@ def _build_graph(
             table_primary_keys,
         )
         relationship_label = ", ".join(f"{source} → {target}" for source, target in columns)
-        edge_key = _value(foreign_key, "id") or f"foreign-key-{index}"
+        edge_key = getattr(foreign_key, "id", None) or f"foreign-key-{index}"
         graph.relationships.append(
             Relationship(
                 source=source_node,
                 target=target_node,
                 key=str(edge_key),
-                foreign_key_id=_value(foreign_key, "id"),
+                foreign_key_id=getattr(foreign_key, "id", None),
                 columns=columns,
                 label=relationship_label or "foreign key",
             )
         )
 
     return graph
+
+
+def _include_augmented_schema(
+    data_model: Any,
+    tables: list[Any],
+    existing_foreign_keys: Sequence[Any],
+) -> tuple[list[Any], list[Any]]:
+    """Add tables exposed only by the compute schema's augmentation view.
+
+    ``DataModel.get_tables()`` uses the integration tables endpoint.  In some
+    Celonis tenants that endpoint omits augmentation tables even though the
+    tables are available in the loaded data-model schema.  PyCelonis exposes
+    that schema through ``AugmentationService``; keep the call lazy and
+    optional so test doubles and older PyCelonis versions retain the existing
+    behaviour.
+    """
+
+    schema = _load_augmented_schema(data_model)
+    if schema is None:
+        return tables, []
+
+    schema_tables = schema.tables or []
+    schema_foreign_keys = schema.foreign_keys or []
+    if not schema_tables:
+        return tables, []
+
+    known_ids = {str(table.id) for table in tables}
+    known_names = {
+        str(table.name).casefold()
+        for table in tables
+        if getattr(table, "name", None) is not None
+    }
+    table_ids_by_reference = {
+        **{str(table.id): str(table.id) for table in tables if getattr(table, "id", None) is not None},
+        **{
+            str(table.name).casefold(): str(getattr(table, "id", None) or table.name)
+            for table in tables
+            if getattr(table, "name", None) is not None
+        },
+    }
+
+    for schema_table in schema_tables:
+        table_id = getattr(schema_table, "id", None) or getattr(schema_table, "name", None)
+        table_name = getattr(schema_table, "name", None) or table_id
+        if table_id is None or table_name is None:
+            continue
+        if str(table_id) in known_ids or str(table_name).casefold() in known_names:
+            continue
+
+        augmented_table = _augmented_table(schema_table, table_id=table_id, table_name=table_name)
+        tables.append(augmented_table)
+        known_ids.add(str(table_id))
+        known_names.add(str(table_name).casefold())
+        table_ids_by_reference[str(table_id)] = str(table_id)
+        table_ids_by_reference[str(table_name).casefold()] = str(table_id)
+
+    existing_relationships = {
+        (
+            str(foreign_key.source_table_id),
+            str(foreign_key.target_table_id),
+            tuple(_foreign_key_columns(foreign_key)),
+        )
+        for foreign_key in existing_foreign_keys
+        if foreign_key is not None
+    }
+    augmented_foreign_keys: list[_AugmentedForeignKeyMetadata] = []
+    for foreign_key in schema_foreign_keys:
+        source_reference = getattr(foreign_key, "source_table_id", None) or getattr(
+            foreign_key, "source_table_name", None
+        )
+        target_reference = getattr(foreign_key, "target_table_id", None) or getattr(
+            foreign_key, "target_table_name", None
+        )
+        source_id = _table_reference_id(table_ids_by_reference, source_reference)
+        target_id = _table_reference_id(table_ids_by_reference, target_reference)
+        columns = _foreign_key_columns(foreign_key)
+        if source_id is None or target_id is None:
+            continue
+        relationship = (source_id, target_id, tuple(columns))
+        if relationship in existing_relationships:
+            continue
+        augmented_foreign_keys.append(
+            _AugmentedForeignKeyMetadata(
+                source_table_id=source_id,
+                target_table_id=target_id,
+                columns=columns,
+                id=getattr(foreign_key, "id", None),
+            )
+        )
+        existing_relationships.add(relationship)
+
+    # Return only schema relationships not already represented by the normal
+    # foreign-key endpoint, since the compute schema can contain both.
+    return tables, augmented_foreign_keys
+
+
+def _load_augmented_schema(data_model: Any) -> Any | None:
+    """Fetch the compute schema with augmentation tables included when possible."""
+
+    client = getattr(data_model, "client", None)
+    data_model_id = data_model.id
+    if client is None or data_model_id is None:
+        return None
+
+    try:
+        from pycelonis.service.augmentation.service import AugmentationService
+
+        method = getattr(AugmentationService, "get_api_internal_compute_data_model_id_schema", None)
+        if not callable(method):
+            return None
+        return method(client, str(data_model_id), include_augmentation=True)
+    except Exception as exc:  # pragma: no cover - depends on tenant/API access
+        warnings.warn(
+            "Could not load Celonis augmented tables; continuing with the regular data-model tables: "
+            f"{exc}",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return None
+
+
+def _augmented_table(schema_table: Any, *, table_id: Any, table_name: Any) -> _AugmentedTableMetadata:
+    """Convert a compute-schema table into the table shape used by the graph builder."""
+
+    raw_columns = getattr(schema_table, "columns", None) or []
+    configured_keys = getattr(schema_table, "primary_key_column_names", None) or getattr(
+        schema_table, "primary_keys", None
+    ) or []
+    columns = _normalise_columns(raw_columns)
+    primary_keys = [str(key) for key in configured_keys if key is not None]
+    primary_keys.extend(
+        str(column["name"])
+        for column in columns
+        if column.get("primary_key") and str(column["name"]) not in primary_keys
+    )
+    return _AugmentedTableMetadata(
+        id=table_id,
+        name=table_name,
+        columns=columns,
+        primary_keys=primary_keys,
+    )
+
+
+def _table_reference_id(table_ids_by_reference: Mapping[str, str], reference: Any) -> str | None:
+    """Resolve either an ID or a case-insensitive table name from schema metadata."""
+
+    if reference is None:
+        return None
+    value = str(reference)
+    return table_ids_by_reference.get(value) or table_ids_by_reference.get(value.casefold())
 
 
 def _fetch_table_columns_parallel(
@@ -522,7 +705,8 @@ def _columns_started(progress: Callable[[str], None] | None, total: int) -> None
     if callable(method):
         method(total)
     else:
-        _report(progress, f"Fetching columns (0/{total})...")
+        if progress is not None:
+            progress(f"Fetching columns (0/{total})...")
 
 
 def _columns_updated(
@@ -537,7 +721,8 @@ def _columns_updated(
     if callable(method):
         method(completed, table_name)
     else:
-        _report(progress, f"Fetched columns ({completed}/{total}): {table_name}")
+        if progress is not None:
+            progress(f"Fetched columns ({completed}/{total}): {table_name}")
 
 
 def _columns_finished(progress: Callable[[str], None] | None) -> None:
@@ -572,44 +757,6 @@ def _table_columns(
     return _normalise_columns(column for column in (columns or []) if column is not None)
 
 
-def _report(progress: Callable[[str], None] | None, message: str) -> None:
-    if progress is not None:
-        progress(message)
-
-
-def _collection(obj: Any, method_name: str, attribute_name: str) -> list[Any]:
-    method = getattr(obj, method_name, None)
-    if callable(method):
-        return [item for item in method() if item is not None]
-    value = getattr(obj, attribute_name, None)
-    return [] if value is None else [item for item in value if item is not None]
-
-
-def _call_or_attribute(obj: Any, method_name: str, attribute_name: str, argument: Any) -> Any:
-    method = getattr(obj, method_name, None)
-    if callable(method):
-        return method(argument)
-    value = getattr(obj, attribute_name, None)
-    if value is None:
-        raise AttributeError(f"Object has neither {method_name}() nor {attribute_name!r}.")
-    return value
-
-
-def _value(obj: Any, name: str, default: Any = None) -> Any:
-    return getattr(obj, name, default)
-
-
-def _identifier(obj: Any, prefix: str) -> str:
-    value = _value(obj, "id") or _value(obj, "name")
-    if value is None:
-        raise ValueError(f"{prefix.capitalize()} metadata must have an id or name.")
-    return str(value)
-
-
-def _model_namespace(data_model: Any) -> str:
-    return _identifier(data_model, "data model")
-
-
 def _normalise_columns(raw_columns: Iterable[Any]) -> list[dict[str, Any]]:
     """Convert Pycelonis column objects into stable graph metadata."""
 
@@ -617,24 +764,28 @@ def _normalise_columns(raw_columns: Iterable[Any]) -> list[dict[str, Any]]:
     for column in raw_columns:
         if column is None:
             continue
-        name = _value(column, "name")
+        if isinstance(column, Mapping):
+            name = column.get("name")
+            type_value = column.get("type_") or column.get("type")
+            primary_key = column.get("primary_key", False)
+        else:
+            name = column.name
+            type_value = getattr(column, "type_", None) or getattr(column, "type", None)
+            primary_key = getattr(column, "primary_key", False)
         if name is None:
             continue
-        type_value = _value(column, "type_")
-        if type_value is None:
-            type_value = _value(column, "type")
         columns.append(
             {
                 "name": str(name),
-                "type": _enum_value(type_value),
-                "primary_key": bool(_value(column, "primary_key", False)),
+                "type": None if type_value is None else str(getattr(type_value, "value", type_value)),
+                "primary_key": bool(primary_key),
             }
         )
     return columns
 
 
 def _primary_keys(table: Any, columns: Sequence[Mapping[str, Any]]) -> list[str]:
-    configured = _value(table, "primary_keys") or []
+    configured = getattr(table, "primary_keys", None) or []
     keys = {str(key) for key in configured if key is not None}
     keys.update(str(column["name"]) for column in columns if column.get("primary_key"))
     return [str(column["name"]) for column in columns if str(column["name"]) in keys] + [
@@ -644,11 +795,11 @@ def _primary_keys(table: Any, columns: Sequence[Mapping[str, Any]]) -> list[str]
 
 def _foreign_key_columns(foreign_key: Any) -> list[tuple[str, str]]:
     pairs: list[tuple[str, str]] = []
-    for column in _value(foreign_key, "columns") or []:
+    for column in getattr(foreign_key, "columns", None) or []:
         if column is None:
             continue
-        source = _value(column, "source_column_name")
-        target = _value(column, "target_column_name")
+        source = getattr(column, "source_column_name", None)
+        target = getattr(column, "target_column_name", None)
         if source is not None and target is not None:
             pairs.append((str(source), str(target)))
     return pairs
@@ -679,16 +830,6 @@ def _orient_relationship(
     if source_is_primary and not target_is_primary:
         return target_node, source_node, [(target, source) for source, target in columns]
     return source_node, target_node, columns
-
-
-def _display_table_name(table: Any) -> str:
-    return str(_value(table, "alias") or _value(table, "name") or _identifier(table, "table"))
-
-
-def _enum_value(value: Any) -> str | None:
-    if value is None:
-        return None
-    return str(getattr(value, "value", value))
 
 
 def _default_title(graph: ERDGraph) -> str:

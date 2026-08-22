@@ -34,6 +34,7 @@ function Icon({ name, size = 18 }) {
     focus: <><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/><circle cx="12" cy="12" r="3"/></>,
     arrow: <><path d="M5 12h14M13 6l6 6-6 6"/></>,
     layers: <><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></>,
+    download: <><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></>,
   };
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
@@ -71,12 +72,14 @@ function TableCard({ data }) {
   const table = data.table;
   const visible = data.visibleColumns;
   const hiddenCount = table.columns.length - visible.length;
+  const isAugmented = Boolean(table.is_augmented);
   return (
-    <article className={`table-card ${data.isSelected ? 'is-selected' : ''} ${data.isDimmed ? 'is-dimmed' : ''}`}>
+    <article className={`table-card ${isAugmented ? 'is-augmented' : ''} ${data.isSelected ? 'is-selected' : ''} ${data.isDimmed ? 'is-dimmed' : ''}`}>
       <Handle type="source" position={Position.Top} className="table-handle table-handle--main" />
       <Handle type="target" position={Position.Bottom} className="table-handle table-handle--main" />
-      <button className="table-card__header" type="button" onClick={() => data.onSelectTable(table.id)} aria-label={`Inspect ${displayName(table)}`}>
+      <button className="table-card__header" type="button" onClick={() => data.onSelectTable(table.id)} aria-label={`Inspect ${isAugmented ? 'augmented ' : ''}${displayName(table)}`}>
         <span className="table-card__model">{table.data_model_name || 'Data model'}</span>
+        {isAugmented && <span className="table-card__kind">Augmented</span>}
         <strong title={displayName(table)}>{displayName(table)}</strong>
         <span className="table-card__count">{table.columns.length} col{table.columns.length === 1 ? '' : 's'}</span>
       </button>
@@ -266,7 +269,7 @@ function DetailPanel({ selection, graph, onClose, onSelectTable }) {
   const foreignColumns = new Set(graph.relationships.filter((relationship) => relationship.source === table.id).flatMap((relationship) => relationship.columns.map(([source]) => source.toLocaleLowerCase())));
   return (
     <aside className="inspector" aria-label="Table details">
-      <InspectorHeader eyebrow={table.data_model_name || 'Table'} title={displayName(table)} onClose={onClose} />
+      <InspectorHeader eyebrow={table.is_augmented ? 'Augmented table' : table.data_model_name || 'Table'} title={displayName(table)} onClose={onClose} />
       <div className="inspector__body">
         <div className="facts"><span><strong>{table.columns.length}</strong> columns</span><span><strong>{connected.length}</strong> relationships</span></div>
         <section className="inspector__section">
@@ -370,6 +373,7 @@ function Explorer({ graph }) {
       <header className="topbar">
         <div className="brand"><span className="brand__mark"><span></span><span></span><span></span></span><div><span>ERD explorer</span><h1>{title}</h1></div></div>
         <div className="topbar__stats"><span><strong>{built.tables.length}</strong> tables</span><span><strong>{built.relationships.length}</strong> relations</span></div>
+        <a className="topbar__export" href="/api/graph.json" download="erd-celonis.json" title="Export the data model as JSON" aria-label="Export the data model as JSON"><Icon name="download" size={16}/><span className="topbar__export-label">Export JSON</span></a>
         <div className="search-wrap">
           <Icon name="search" size={17}/>
           <input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find table or column" aria-label="Find table or column" />
@@ -404,9 +408,9 @@ function Explorer({ graph }) {
           proOptions={{ hideAttribution: true }}
         >
           <Background color="#c7cfcc" gap={24} size={1} />
-          <MiniMap nodeColor={(node) => node.data.isDimmed ? '#c9cfcc' : '#86bd67'} maskColor="rgba(238, 242, 241, .78)" pannable zoomable />
+          <MiniMap nodeColor={(node) => node.data.isDimmed ? '#c9cfcc' : node.data.table.is_augmented ? '#7665b4' : '#86bd67'} maskColor="rgba(238, 242, 241, .78)" pannable zoomable />
           <Controls showInteractive={false} />
-          <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span><span><Icon name="focus" size={14}/>Drag or two-finger pan · pinch zoom</span></div>
+          <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span><span><i className="dot dot--augmented"></i>Augmented table</span><span><Icon name="focus" size={14}/>Drag or two-finger pan · pinch zoom</span></div>
         </ReactFlow>
       </section>
       <DetailPanel selection={selection} graph={graph} onClose={() => setSelection(null)} onSelectTable={(id) => { selectTable(id); flow?.fitView({ nodes: [{ id }], padding: 0.7, duration: 500, maxZoom: 1.2 }); }} />

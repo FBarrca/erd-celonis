@@ -93,6 +93,10 @@ def test_server_serves_ui_json_and_hashed_assets(sample_graph):
             assert response.headers["Cache-Control"] == "no-store"
             assert payload["tables"][0]["alias"] == "Orders"
 
+        with urlopen(f"{base_url}/api/graph.json", timeout=5) as response:
+            assert json.loads(response.read()) == payload
+            assert response.headers["Content-Disposition"] == 'attachment; filename="erd-celonis.json"'
+
         asset_path = re.search(r'(?:src|href)="(/static/assets/[^"]+\.js)"', html).group(1)
         with urlopen(f"{base_url}{asset_path}", timeout=5) as response:
             assert response.headers["Content-Type"].startswith(("text/javascript", "application/javascript"))
