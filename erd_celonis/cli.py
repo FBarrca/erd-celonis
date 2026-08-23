@@ -16,6 +16,7 @@ from rich.progress import (
 )
 from rich.status import Status
 
+from .ddl import graph_to_ddl
 from .erd import build_data_pool_graph
 from .web import serve_graph
 
@@ -29,8 +30,8 @@ def _configured_key_type(key_type: str | None) -> str:
 class _StatusLine:
     """Display progress with Rich's live one-line status renderer."""
 
-    def __init__(self, console: Console | None = None) -> None:
-        self.console = console or Console()
+    def __init__(self, console: Console | None = None, *, stderr: bool = False) -> None:
+        self.console = console or Console(stderr=stderr)
         self._status: Status | None = None
         self._progress: Progress | None = None
         self._progress_task_id: int | None = None
@@ -132,8 +133,9 @@ def erd(
     host: str = "127.0.0.1",
     port: int = 8000,
     open_browser: bool = True,
+    ddl: bool = False,
 ) -> None:
-    """Serve an interactive ERD from a Celonis data pool.
+    """Serve an interactive ERD or export SQL-like DDL from a Celonis data pool.
 
     Args:
         pool_id: Celonis data pool ID.
@@ -147,9 +149,12 @@ def erd(
         host: Address on which to serve the explorer. Defaults to local-only.
         port: HTTP port. Use 0 to select an available port automatically.
         open_browser: Open the explorer in the default browser when ready.
+        ddl: Write a compact SQL-like schema description to stdout instead of
+            starting the interactive explorer.
     """
 
-    status = _StatusLine()
+    # DDL is intended to be piped into another process, so keep stdout pure.
+    status = _StatusLine(stderr=ddl)
     # Pass the reporter object, not only its report method, so the ERD builder
     # can activate Rich's ETA-enabled progress task for column fetching.
     report = status
@@ -185,9 +190,13 @@ def erd(
             include_columns=include_columns,
             progress=report,
         )
-        report("Preparing interactive explorer...")
+        report("Preparing DDL schema..." if ddl else "Preparing interactive explorer...")
     finally:
         status.close()
+
+    if ddl:
+        print(graph_to_ddl(graph), end="")
+        return
 
     print(f"Loaded {graph.number_of_nodes()} tables and {graph.number_of_edges()} relationships.")
     serve_graph(graph, host=host, port=port, open_browser=open_browser)

@@ -117,4 +117,5 @@ def test_cli_defaults_to_local_interactive_server():
     assert parameters["host"].default == "127.0.0.1"
     assert parameters["port"].default == 8000
     assert parameters["open_browser"].default is True
+    assert parameters["ddl"].default is False
     assert "output" not in parameters

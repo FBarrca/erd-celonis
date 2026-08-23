@@ -54,6 +54,24 @@ erd-celonis "<data-pool-id>"
 The command opens the explorer at `http://127.0.0.1:8000` and keeps running
 until you press `Ctrl+C`.
 
+Export the selected data model as a compact SQL-like DDL description for use
+with an LLM or other text-based tooling:
+
+```bash
+erd-celonis "<data-pool-id>" --ddl
+```
+
+DDL is written to stdout, while loading progress is written to stderr, so it
+can be redirected directly to a file:
+
+```bash
+erd-celonis "<data-pool-id>" --ddl > schema.sql
+```
+
+The output describes tables, columns, primary keys, and configured foreign
+keys. It is intentionally SQL-like rather than tied to a specific database
+dialect; Celonis data types are preserved as provided by the API.
+
 Select a particular data model with the second positional argument:
 
 ```bash
