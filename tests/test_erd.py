@@ -1,5 +1,4 @@
 from dataclasses import dataclass, field
-from types import SimpleNamespace
 
 from erd_celonis.cli import _StatusLine, _configured_key_type, first_data_model_id
 from erd_celonis.erd import (
@@ -180,28 +179,6 @@ def test_build_data_model_graph_uses_embedded_columns_without_endpoint():
     assert graph.tables[0].columns == [
         {"name": "ID", "type": "INTEGER", "primary_key": True}
     ]
-
-
-def test_build_data_model_graph_includes_augmented_tables(monkeypatch):
-    class DataModelWithAugmentation(DataModel):
-        client = object()
-
-    entitlement = SimpleNamespace(
-        id="augmented-entitlement-id",
-        name="Entitlement",
-        augmentation=True,
-        primary_key_column_names=["ENTITLEMENT_ID"],
-        columns=[Column("ENTITLEMENT_ID", "STRING")],
-    )
-    schema = SimpleNamespace(tables=[entitlement], foreign_keys=[])
-    monkeypatch.setattr("erd_celonis.erd._load_augmented_schema", lambda _data_model: schema)
-
-    model = DataModelWithAugmentation("99c0e09c-d5e0-417c-b764-0dd96be8033a", "Sales", [], [])
-    graph = build_data_model_graph(model)
-
-    assert [table.name for table in graph.tables] == ["Entitlement"]
-    assert graph.tables[0].is_augmented is True
-    assert graph.tables[0].columns[0]["name"] == "ENTITLEMENT_ID"
 
 
 def test_build_data_model_graph_fetches_columns_only_when_missing():

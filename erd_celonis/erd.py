@@ -33,7 +33,6 @@ class TableNode:
     namespace: str
     data_model_id: Any = None
     data_model_name: Any = None
-    is_augmented: bool = False
 
 
 @dataclass
@@ -67,28 +66,6 @@ class ERDGraph:
         return len(self.relationships)
 
 
-@dataclass
-class _AugmentedTableMetadata:
-    """Small table adapter for tables returned by the compute schema API."""
-
-    id: Any
-    name: Any
-    columns: list[Any]
-    primary_keys: list[str]
-    alias: Any = None
-    augmentation: bool = True
-
-
-@dataclass
-class _AugmentedForeignKeyMetadata:
-    """Foreign-key adapter for name-based relationships in the compute schema."""
-
-    source_table_id: Any
-    target_table_id: Any
-    columns: list[Any]
-    id: Any = None
-
-
 def build_data_model_graph(
     data_model: Any,
     *,
@@ -120,8 +97,6 @@ def build_data_model_graph(
         progress(f"Found {len(tables)} table(s).")
         progress("Fetching foreign-key metadata...")
     foreign_keys = data_model.get_foreign_keys()
-    tables, augmented_foreign_keys = _include_augmented_schema(data_model, tables, foreign_keys)
-    foreign_keys.extend(augmented_foreign_keys)
     if progress is not None:
         progress(f"Found {len(foreign_keys)} foreign-key relationship(s).")
 
@@ -193,7 +168,6 @@ def build_data_pool_graph(
                     namespace=table.namespace,
                     data_model_id=model.id,
                     data_model_name=model.name,
-                    is_augmented=table.is_augmented,
                 )
             )
         graph.relationships.extend(
@@ -474,7 +448,6 @@ def _build_graph(
                 primary_keys=primary_keys,
                 columns=columns,
                 namespace=namespace,
-                is_augmented=bool(getattr(table, "augmentation", False)),
             )
         )
 
@@ -514,156 +487,6 @@ def _build_graph(
         )
 
     return graph
-
-
-def _include_augmented_schema(
-    data_model: Any,
-    tables: list[Any],
-    existing_foreign_keys: Sequence[Any],
-) -> tuple[list[Any], list[Any]]:
-    """Add tables exposed only by the compute schema's augmentation view.
-
-    ``DataModel.get_tables()`` uses the integration tables endpoint.  In some
-    Celonis tenants that endpoint omits augmentation tables even though the
-    tables are available in the loaded data-model schema.  PyCelonis exposes
-    that schema through ``AugmentationService``; keep the call lazy and
-    optional so test doubles and older PyCelonis versions retain the existing
-    behaviour.
-    """
-
-    schema = _load_augmented_schema(data_model)
-    if schema is None:
-        return tables, []
-
-    schema_tables = schema.tables or []
-    schema_foreign_keys = schema.foreign_keys or []
-    if not schema_tables:
-        return tables, []
-
-    known_ids = {str(table.id) for table in tables}
-    known_names = {
-        str(table.name).casefold()
-        for table in tables
-        if getattr(table, "name", None) is not None
-    }
-    table_ids_by_reference = {
-        **{str(table.id): str(table.id) for table in tables if getattr(table, "id", None) is not None},
-        **{
-            str(table.name).casefold(): str(getattr(table, "id", None) or table.name)
-            for table in tables
-            if getattr(table, "name", None) is not None
-        },
-    }
-
-    for schema_table in schema_tables:
-        table_id = getattr(schema_table, "id", None) or getattr(schema_table, "name", None)
-        table_name = getattr(schema_table, "name", None) or table_id
-        if table_id is None or table_name is None:
-            continue
-        if str(table_id) in known_ids or str(table_name).casefold() in known_names:
-            continue
-
-        augmented_table = _augmented_table(schema_table, table_id=table_id, table_name=table_name)
-        tables.append(augmented_table)
-        known_ids.add(str(table_id))
-        known_names.add(str(table_name).casefold())
-        table_ids_by_reference[str(table_id)] = str(table_id)
-        table_ids_by_reference[str(table_name).casefold()] = str(table_id)
-
-    existing_relationships = {
-        (
-            str(foreign_key.source_table_id),
-            str(foreign_key.target_table_id),
-            tuple(_foreign_key_columns(foreign_key)),
-        )
-        for foreign_key in existing_foreign_keys
-        if foreign_key is not None
-    }
-    augmented_foreign_keys: list[_AugmentedForeignKeyMetadata] = []
-    for foreign_key in schema_foreign_keys:
-        source_reference = getattr(foreign_key, "source_table_id", None) or getattr(
-            foreign_key, "source_table_name", None
-        )
-        target_reference = getattr(foreign_key, "target_table_id", None) or getattr(
-            foreign_key, "target_table_name", None
-        )
-        source_id = _table_reference_id(table_ids_by_reference, source_reference)
-        target_id = _table_reference_id(table_ids_by_reference, target_reference)
-        columns = _foreign_key_columns(foreign_key)
-        if source_id is None or target_id is None:
-            continue
-        relationship = (source_id, target_id, tuple(columns))
-        if relationship in existing_relationships:
-            continue
-        augmented_foreign_keys.append(
-            _AugmentedForeignKeyMetadata(
-                source_table_id=source_id,
-                target_table_id=target_id,
-                columns=columns,
-                id=getattr(foreign_key, "id", None),
-            )
-        )
-        existing_relationships.add(relationship)
-
-    # Return only schema relationships not already represented by the normal
-    # foreign-key endpoint, since the compute schema can contain both.
-    return tables, augmented_foreign_keys
-
-
-def _load_augmented_schema(data_model: Any) -> Any | None:
-    """Fetch the compute schema with augmentation tables included when possible."""
-
-    client = getattr(data_model, "client", None)
-    data_model_id = data_model.id
-    if client is None or data_model_id is None:
-        return None
-
-    try:
-        from pycelonis.service.augmentation.service import AugmentationService
-
-        method = getattr(AugmentationService, "get_api_internal_compute_data_model_id_schema", None)
-        if not callable(method):
-            return None
-        return method(client, str(data_model_id), include_augmentation=True)
-    except Exception as exc:  # pragma: no cover - depends on tenant/API access
-        warnings.warn(
-            "Could not load Celonis augmented tables; continuing with the regular data-model tables: "
-            f"{exc}",
-            RuntimeWarning,
-            stacklevel=2,
-        )
-        return None
-
-
-def _augmented_table(schema_table: Any, *, table_id: Any, table_name: Any) -> _AugmentedTableMetadata:
-    """Convert a compute-schema table into the table shape used by the graph builder."""
-
-    raw_columns = getattr(schema_table, "columns", None) or []
-    configured_keys = getattr(schema_table, "primary_key_column_names", None) or getattr(
-        schema_table, "primary_keys", None
-    ) or []
-    columns = _normalise_columns(raw_columns)
-    primary_keys = [str(key) for key in configured_keys if key is not None]
-    primary_keys.extend(
-        str(column["name"])
-        for column in columns
-        if column.get("primary_key") and str(column["name"]) not in primary_keys
-    )
-    return _AugmentedTableMetadata(
-        id=table_id,
-        name=table_name,
-        columns=columns,
-        primary_keys=primary_keys,
-    )
-
-
-def _table_reference_id(table_ids_by_reference: Mapping[str, str], reference: Any) -> str | None:
-    """Resolve either an ID or a case-insensitive table name from schema metadata."""
-
-    if reference is None:
-        return None
-    value = str(reference)
-    return table_ids_by_reference.get(value) or table_ids_by_reference.get(value.casefold())
 
 
 def _fetch_table_columns_parallel(

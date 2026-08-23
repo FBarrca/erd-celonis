@@ -72,14 +72,12 @@ function TableCard({ data }) {
   const table = data.table;
   const visible = data.visibleColumns;
   const hiddenCount = table.columns.length - visible.length;
-  const isAugmented = Boolean(table.is_augmented);
   return (
-    <article className={`table-card ${isAugmented ? 'is-augmented' : ''} ${data.isSelected ? 'is-selected' : ''} ${data.isDimmed ? 'is-dimmed' : ''}`}>
+    <article className={`table-card ${data.isSelected ? 'is-selected' : ''} ${data.isDimmed ? 'is-dimmed' : ''}`}>
       <Handle type="source" position={Position.Top} className="table-handle table-handle--main" />
       <Handle type="target" position={Position.Bottom} className="table-handle table-handle--main" />
-      <button className="table-card__header" type="button" onClick={() => data.onSelectTable(table.id)} aria-label={`Inspect ${isAugmented ? 'augmented ' : ''}${displayName(table)}`}>
+      <button className="table-card__header" type="button" onClick={() => data.onSelectTable(table.id)} aria-label={`Inspect ${displayName(table)}`}>
         <span className="table-card__model">{table.data_model_name || 'Data model'}</span>
-        {isAugmented && <span className="table-card__kind">Augmented</span>}
         <strong title={displayName(table)}>{displayName(table)}</strong>
         <span className="table-card__count">{table.columns.length} col{table.columns.length === 1 ? '' : 's'}</span>
       </button>
@@ -269,7 +267,7 @@ function DetailPanel({ selection, graph, onClose, onSelectTable }) {
   const foreignColumns = new Set(graph.relationships.filter((relationship) => relationship.source === table.id).flatMap((relationship) => relationship.columns.map(([source]) => source.toLocaleLowerCase())));
   return (
     <aside className="inspector" aria-label="Table details">
-      <InspectorHeader eyebrow={table.is_augmented ? 'Augmented table' : table.data_model_name || 'Table'} title={displayName(table)} onClose={onClose} />
+      <InspectorHeader eyebrow={table.data_model_name || 'Table'} title={displayName(table)} onClose={onClose} />
       <div className="inspector__body">
         <div className="facts"><span><strong>{table.columns.length}</strong> columns</span><span><strong>{connected.length}</strong> relationships</span></div>
         <section className="inspector__section">
@@ -408,9 +406,9 @@ function Explorer({ graph }) {
           proOptions={{ hideAttribution: true }}
         >
           <Background color="#c7cfcc" gap={24} size={1} />
-          <MiniMap nodeColor={(node) => node.data.isDimmed ? '#c9cfcc' : node.data.table.is_augmented ? '#7665b4' : '#86bd67'} maskColor="rgba(238, 242, 241, .78)" pannable zoomable />
+          <MiniMap nodeColor={(node) => node.data.isDimmed ? '#c9cfcc' : '#86bd67'} maskColor="rgba(238, 242, 241, .78)" pannable zoomable />
           <Controls showInteractive={false} />
-          <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span><span><i className="dot dot--augmented"></i>Augmented table</span><span><Icon name="focus" size={14}/>Drag or two-finger pan · pinch zoom</span></div>
+          <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span><span><Icon name="focus" size={14}/>Drag or two-finger pan · pinch zoom</span></div>
         </ReactFlow>
       </section>
       <DetailPanel selection={selection} graph={graph} onClose={() => setSelection(null)} onSelectTable={(id) => { selectTable(id); flow?.fitView({ nodes: [{ id }], padding: 0.7, duration: 500, maxZoom: 1.2 }); }} />
