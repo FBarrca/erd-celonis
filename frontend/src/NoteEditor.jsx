@@ -48,6 +48,6 @@ export default function NoteEditor({ value, onChange, autoFocus }) {
     });
   }, [value]);
 
-  return <div ref={host} className="sticky-note__editor nodrag nopan nowheel"
+  return <div ref={host} className="sticky-note__editor nodrag nopan"
     onKeyDown={(event) => event.stopPropagation()} onDoubleClick={(event) => event.stopPropagation()} />;
 }
