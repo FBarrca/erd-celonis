@@ -17,6 +17,7 @@ import '@xyflow/react/dist/style.css';
 import './styles.css';
 import { findPath } from './findPath';
 import PathFinder from './PathFinder';
+import Search from './Search.jsx';
 
 const NODE_WIDTH = 286;
 const ROW_HEIGHT = 31;
@@ -234,6 +235,10 @@ function buildElements(graph, activeModel, onSelectTable) {
 }
 
 function DetailPanel({ selection, graph, onClose, onSelectTable, onFindPath }) {
+  const columnRef = useRef(null);
+  useEffect(() => {
+    if (selection?.kind === 'table' && selection.column) columnRef.current?.scrollIntoView({ block: 'center' });
+  }, [selection]);
   if (!selection) return null;
   const tableById = new Map(graph.tables.map((table) => [table.id, table]));
   if (selection.kind === 'relationship') {
@@ -280,7 +285,8 @@ function DetailPanel({ selection, graph, onClose, onSelectTable, onFindPath }) {
           <div className="inspector-columns">
             {table.columns.length ? table.columns.map((column) => {
               const key = markerFor(column, table, foreignColumns);
-              return <div className="inspector-column" key={column.name}><span><strong>{column.name}</strong><small>{column.type || 'Unknown type'}</small></span>{key && <span className="key-badge">{key}</span>}</div>;
+              const targeted = selection.column === column.name;
+              return <div className={`inspector-column ${targeted ? 'is-search-target' : ''}`} ref={targeted ? columnRef : null} aria-current={targeted ? 'true' : undefined} key={column.name}><span><strong>{column.name}</strong><small>{column.type || 'Unknown type'}</small></span>{key && <span className="key-badge">{key}</span>}</div>;
             }) : <p className="empty-note">Run without <code>--include_columns=False</code> to load columns.</p>}
           </div>
         </section>
@@ -309,9 +315,8 @@ function Explorer({ graph }) {
   const [selection, setSelection] = useState(null);
   const [pathOpen, setPathOpen] = useState(false);
   const [endpoints, setEndpoints] = useState({ from: '', to: '' });
-  const [query, setQuery] = useState('');
   const [flow, setFlow] = useState(null);
-  const searchRef = useRef(null);
+  const searchFocusTimer = useRef(null);
   const selectTable = useCallback((id) => { setPathOpen(false); setSelection({ kind: 'table', id }); }, []);
   const built = useMemo(() => buildElements(graph, activeModel, selectTable), [graph, activeModel, selectTable]);
   const path = useMemo(() => findPath(built.tables, built.relationships, endpoints.from, endpoints.to), [built, endpoints]);
@@ -341,6 +346,7 @@ function Explorer({ graph }) {
 
   useEffect(() => {
     setSelection(null);
+    clearTimeout(searchFocusTimer.current);
     setNodes(built.nodes);
     setEdges(built.edges);
     requestAnimationFrame(() => flow?.fitView({ padding: 0.15, duration: 500, maxZoom: 1 }));
@@ -379,23 +385,25 @@ function Explorer({ graph }) {
 
   useEffect(() => {
     const onKey = (event) => {
-      if (event.key === 'Escape') { setSelection(null); setQuery(''); setPathOpen(false); }
-      if (event.key === '/' && document.activeElement !== searchRef.current) { event.preventDefault(); searchRef.current?.focus(); }
+      if (event.key === 'Escape' && !event.defaultPrevented) { setSelection(null); setPathOpen(false); }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  const results = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
-    if (!normalized) return [];
-    return built.tables.filter((table) => [displayName(table), table.name, ...table.columns.map((column) => column.name)].some((value) => String(value || '').toLocaleLowerCase().includes(normalized))).slice(0, 8);
-  }, [built.tables, query]);
+  useEffect(() => {
+    const timer = searchFocusTimer.current;
+    return () => clearTimeout(timer);
+  }, [selection, pathOpen]);
 
-  const focusTable = (table) => {
-    selectTable(table.id);
-    setQuery('');
-    flow?.fitView({ nodes: [{ id: table.id }], padding: 0.8, duration: 650, maxZoom: 1.25 });
+  const focusResult = (result) => {
+    setPathOpen(false);
+    setSelection({ kind: 'table', id: result.table.id, column: result.column });
+    clearTimeout(searchFocusTimer.current);
+    // Fit after the inspector has resized the canvas.
+    searchFocusTimer.current = setTimeout(() => {
+      flow?.fitView({ nodes: [{ id: result.table.id }], padding: 0.8, duration: 650, maxZoom: 1.25 });
+    }, 280);
   };
 
   const title = graph.metadata.data_pool_name || graph.metadata.data_model_name || 'Celonis data model';
@@ -405,12 +413,7 @@ function Explorer({ graph }) {
         <div className="brand"><span className="brand__mark"><span></span><span></span><span></span></span><div><span>ERD explorer</span><h1>{title}</h1></div></div>
         <div className="topbar__stats"><span><strong>{built.tables.length}</strong> tables</span><span><strong>{built.relationships.length}</strong> relations</span></div>
         <a className="topbar__export" href="/api/graph.json" download="erd-celonis.json" title="Export the data model as JSON" aria-label="Export the data model as JSON"><Icon name="download" size={16}/><span className="topbar__export-label">Export JSON</span></a>
-        <div className="search-wrap">
-          <Icon name="search" size={17}/>
-          <input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find table or column" aria-label="Find table or column" />
-          <kbd>/</kbd>
-          {results.length > 0 && <div className="search-results">{results.map((table) => <button type="button" key={table.id} onClick={() => focusTable(table)}><Icon name="table" size={15}/><span><strong>{displayName(table)}</strong><small>{table.data_model_name}</small></span></button>)}</div>}
-        </div>
+        <Search tables={built.tables} onSelect={focusResult}/>
       </header>
       <nav className="model-bar" aria-label="Data model filter">
         <Icon name="layers" size={16}/><span className="model-bar__label">Scope</span>

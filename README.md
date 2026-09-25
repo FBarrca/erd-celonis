@@ -10,7 +10,8 @@ The explorer provides:
 - relationship-aware top-to-bottom schema layout that places referenced
   tables above their dependants and spreads each rank across the canvas;
 - drag or two-finger trackpad pan, pinch zoom, minimap, and draggable table cards;
-- search across table and column names;
+- typo-tolerant search powered by Fuse.js across table aliases, physical names,
+  and individual columns in the selected model scope, with highlighted matches;
 - export the loaded data model as a JSON file;
 - table and relationship inspectors with exact column mappings;
 - a relationship lens that fades unrelated parts of the model;
@@ -97,6 +98,15 @@ Use **Swap tables** to reverse the route, **Fit route** to recenter it, or
 **Clear** to choose new endpoints. Disconnected tables show a **No path found**
 explanation for the loaded scope. Changing model scope clears the endpoints;
 closing the panel or pressing Escape returns to normal inspection.
+
+### Search tables and columns
+
+Search accepts multiple words and treats spaces, underscores, hyphens, and dots
+as equivalent separators. Exact names appear before approximate matches. Press
+`/` to focus search, use the arrow keys and Enter to open a result, or Escape to
+dismiss suggestions. Selecting a column reveals and highlights it in the table
+inspector. Results include a count and a **Show more** control after the first 50.
+Column search requires loaded column metadata.
 
 ## Develop
 
