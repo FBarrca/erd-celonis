@@ -28,9 +28,11 @@ export default function QueryPanel({ poolId, modelId, modelName, tables, drafts,
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState(null);
   const [expanded, setExpanded] = useState(false);
+  const [resultsHeight, setResultsHeight] = useState(250);
   const requestRef = useRef(null);
   const editorRef = useRef(null);
   const resizeRef = useRef(null);
+  const resultsResizeRef = useRef(null);
   const completionIndex = useMemo(() => createPqlCompletionIndex(tables), [tables]);
   const parsed = useMemo(() => {
     try { return { query: parsePqlScript(draft.script, draft.limit), error: '' }; }
@@ -103,6 +105,7 @@ export default function QueryPanel({ poolId, modelId, modelName, tables, drafts,
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   const stale = result && JSON.stringify(result.draft) !== JSON.stringify(draft);
+  const resizeResults = nextHeight => setResultsHeight(Math.max(46, Math.min(650, nextHeight)));
   return <section className={`query-panel ${open ? 'is-open' : ''} ${expanded && open ? 'is-expanded' : ''}`} aria-label="PQL query panel"
     onKeyDown={event => { if (!event.defaultPrevented && (event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void run(); } }}>
     {open && !expanded && <div className="query-resize" role="separator" aria-label="Resize PQL panel" aria-orientation="horizontal" tabIndex={0}
@@ -138,7 +141,13 @@ export default function QueryPanel({ poolId, modelId, modelName, tables, drafts,
       <div className="query-messages">
         {notice && <p className="query-note" role="status">{notice}</p>}
       </div>
-      <div className="query-results" aria-busy={running}>
+      <div className="query-results-resize" role="separator" aria-label="Resize PQL results" aria-orientation="horizontal"
+        aria-valuemin={46} aria-valuemax={650} aria-valuenow={resultsHeight} tabIndex={0}
+        onKeyDown={event => { if (['ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); resizeResults(resultsHeight + (event.key === 'ArrowUp' ? 30 : -30)); } }}
+        onPointerDown={event => { resultsResizeRef.current = { y: event.clientY, height: resultsHeight }; event.currentTarget.setPointerCapture(event.pointerId); }}
+        onPointerMove={event => { if (resultsResizeRef.current) resizeResults(resultsResizeRef.current.height + resultsResizeRef.current.y - event.clientY); }}
+        onPointerUp={() => { resultsResizeRef.current = null; }} onPointerCancel={() => { resultsResizeRef.current = null; }} />
+      <div className="query-results" style={{ '--query-results-height': `${resultsHeight}px` }} aria-busy={running}>
         <div className="query-results-toolbar"><strong>RESULTS</strong><span>{result ? `${result.row_count.toLocaleString()} rows · ${(result.elapsed_ms / 1000).toFixed(2)} s` : 'DataFrame'}</span>{result && <button type="button" onClick={exportCsv}>Download CSV</button>}</div>
         {error && <pre className="query-error" role="alert">{error}</pre>}
         {!result && !error && <div className="query-empty"><strong>{running ? 'Executing in Celonis…' : 'Run a query to see results'}</strong><p>{running ? 'You can keep exploring the diagram. Switching models stops waiting; the server query may still finish.' : 'Ctrl / ⌘ + Enter · Results stay in this session'}</p></div>}
