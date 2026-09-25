@@ -11,10 +11,17 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
+  useNodesInitialized,
   useNodesState,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './styles.css';
+import { findPath } from './findPath';
+import PathFinder from './PathFinder';
+import Search from './Search.jsx';
+import QueryPanel from './QueryPanel.jsx';
+import { createDraftStore } from './queryDrafts.js';
+import { createViewStore, modelId, restorePositions, MIN_ZOOM, MAX_ZOOM } from './savedViews.js';
 
 const NODE_WIDTH = 286;
 const ROW_HEIGHT = 31;
@@ -76,7 +83,7 @@ function TableCard({ data }) {
     <article className={`table-card ${data.isSelected ? 'is-selected' : ''} ${data.isDimmed ? 'is-dimmed' : ''}`}>
       <Handle type="source" position={Position.Top} className="table-handle table-handle--main" />
       <Handle type="target" position={Position.Bottom} className="table-handle table-handle--main" />
-      <button className="table-card__header" type="button" onClick={() => data.onSelectTable(table.id)} aria-label={`Inspect ${displayName(table)}`}>
+      <button className="table-card__header" type="button" onClick={() => data.onSelectTable(table.id)} aria-label={`${data.choosingDestination ? 'Connect to' : 'Inspect'} ${displayName(table)}`}>
         <span className="table-card__model">{table.data_model_name || 'Data model'}</span>
         <strong title={displayName(table)}>{displayName(table)}</strong>
         <span className="table-card__count">{table.columns.length} col{table.columns.length === 1 ? '' : 's'}</span>
@@ -180,7 +187,7 @@ function relationshipAwarePositions(layout, tables, columnMap) {
 }
 
 function buildElements(graph, activeModel, onSelectTable) {
-  const tables = activeModel === 'all' ? graph.tables : graph.tables.filter((table) => String(table.data_model_id) === activeModel);
+  const tables = graph.tables.filter((table) => modelId(graph, table) === activeModel);
   const tableIds = new Set(tables.map((table) => table.id));
   const relationships = graph.relationships.filter((relationship) => tableIds.has(relationship.source) && tableIds.has(relationship.target));
   const foreignByTable = new Map(tables.map((table) => [table.id, new Set()]));
@@ -229,7 +236,11 @@ function buildElements(graph, activeModel, onSelectTable) {
   return { nodes, edges, tables, relationships };
 }
 
-function DetailPanel({ selection, graph, onClose, onSelectTable }) {
+function DetailPanel({ selection, graph, onClose, onSelectTable, onFindPath }) {
+  const columnRef = useRef(null);
+  useEffect(() => {
+    if (selection?.kind === 'table' && selection.column) columnRef.current?.scrollIntoView({ block: 'center' });
+  }, [selection]);
   if (!selection) return null;
   const tableById = new Map(graph.tables.map((table) => [table.id, table]));
   if (selection.kind === 'relationship') {
@@ -270,12 +281,14 @@ function DetailPanel({ selection, graph, onClose, onSelectTable }) {
       <InspectorHeader eyebrow={table.data_model_name || 'Table'} title={displayName(table)} onClose={onClose} />
       <div className="inspector__body">
         <div className="facts"><span><strong>{table.columns.length}</strong> columns</span><span><strong>{connected.length}</strong> relationships</span></div>
+        <button className="path-start" type="button" onClick={() => onFindPath(table.id)}>Find connection to…</button>
         <section className="inspector__section">
           <h3>Columns</h3>
           <div className="inspector-columns">
             {table.columns.length ? table.columns.map((column) => {
               const key = markerFor(column, table, foreignColumns);
-              return <div className="inspector-column" key={column.name}><span><strong>{column.name}</strong><small>{column.type || 'Unknown type'}</small></span>{key && <span className="key-badge">{key}</span>}</div>;
+              const targeted = selection.column === column.name;
+              return <div className={`inspector-column ${targeted ? 'is-search-target' : ''}`} ref={targeted ? columnRef : null} aria-current={targeted ? 'true' : undefined} key={column.name}><span><strong>{column.name}</strong><small>{column.type || 'Unknown type'}</small></span>{key && <span className="key-badge">{key}</span>}</div>;
             }) : <p className="empty-note">Run without <code>--include_columns=False</code> to load columns.</p>}
           </div>
         </section>
@@ -298,29 +311,116 @@ function InspectorHeader({ eyebrow, title, onClose }) {
   return <header className="inspector__header"><div><span>{eyebrow}</span><h2>{title}</h2></div><button type="button" onClick={onClose} aria-label="Close inspector"><Icon name="close"/></button></header>;
 }
 
-function Explorer({ graph }) {
-  const models = useMemo(() => [...new Map(graph.tables.map((table) => [String(table.data_model_id), table.data_model_name || table.data_model_id])).entries()], [graph]);
-  const [activeModel, setActiveModel] = useState(models.length === 1 ? models[0][0] : 'all');
+function Diagram({ graph }) {
+  const [views] = useState(() => createViewStore());
+  const [drafts] = useState(() => createDraftStore());
+  const [queryOpen, setQueryOpen] = useState(true);
+  const [queryHeight, setQueryHeight] = useState(440);
+  const models = useMemo(() => [...new Map(graph.tables.map((table) => [modelId(graph, table), table.data_model_name || graph.metadata.data_model_name || modelId(graph, table)])).entries()], [graph]);
+  const [activeModel, setActiveModel] = useState(() => views.loadScope(graph));
+  // Each scope owns its React Flow lifecycle, including pending viewport animations.
+  return <ReactFlowProvider key={activeModel}><Explorer graph={graph} models={models} activeModel={activeModel} setActiveModel={setActiveModel} views={views}
+    drafts={drafts} queryOpen={queryOpen} setQueryOpen={setQueryOpen} queryHeight={queryHeight} setQueryHeight={setQueryHeight}/></ReactFlowProvider>;
+}
+
+function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, queryOpen, setQueryOpen, queryHeight, setQueryHeight }) {
+  const [savedView] = useState(() => views.load(graph, activeModel));
   const [selection, setSelection] = useState(null);
-  const [query, setQuery] = useState('');
+  const [pathOpen, setPathOpen] = useState(false);
+  const [endpoints, setEndpoints] = useState({ from: '', to: '' });
   const [flow, setFlow] = useState(null);
-  const searchRef = useRef(null);
-  const selectTable = useCallback((id) => setSelection({ kind: 'table', id }), []);
-  const built = useMemo(() => buildElements(graph, activeModel, selectTable), [graph, activeModel, selectTable]);
+  const searchFocusTimer = useRef(null);
+  const viewReady = useRef(false);
+  const nodesInitialized = useNodesInitialized();
+  const selectTable = useCallback((id) => { setPathOpen(false); setSelection({ kind: 'table', id }); }, []);
+  const built = useMemo(() => {
+    const elements = buildElements(graph, activeModel, selectTable);
+    return { ...elements, nodes: restorePositions(elements.nodes, savedView, NODE_WIDTH, HORIZONTAL_GAP) };
+  }, [graph, activeModel, selectTable, savedView]);
+  const startingTable = built.tables.find((table) => table.id === endpoints.from);
+  const choosingDestination = pathOpen && Boolean(startingTable) && !endpoints.to;
+  const path = useMemo(() => findPath(built.tables, built.relationships, endpoints.from, endpoints.to), [built, endpoints]);
   const [nodes, setNodes, onNodesChange] = useNodesState(built.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(built.edges);
 
+  const saveView = useCallback(() => {
+    if (viewReady.current && flow) views.save(graph, activeModel, flow.getNodes(), flow.getViewport());
+  }, [flow, graph, activeModel, views]);
+
+  const changeModel = (id) => {
+    if (id === activeModel) return;
+    saveView();
+    viewReady.current = false;
+    views.saveScope(graph, id);
+    setActiveModel(id);
+  };
+
   useEffect(() => {
+    if (!flow || (!nodesInitialized && built.nodes.length)) return;
+    let cancelled = false;
+    const restore = async () => {
+      if (savedView?.viewport) await flow.setViewport(savedView.viewport);
+      else await flow.fitView({ padding: 0.15, maxZoom: 1 });
+      if (!cancelled) viewReady.current = true;
+    };
+    void restore();
+    return () => { cancelled = true; viewReady.current = false; };
+  }, [flow, nodesInitialized, built, savedView]);
+
+  useEffect(() => {
+    const onVisibility = () => { if (document.visibilityState === 'hidden') saveView(); };
+    window.addEventListener('pagehide', saveView);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', saveView);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [saveView]);
+
+  const chooseDestination = useCallback((id) => {
+    setEndpoints((current) => id === current.from ? current : { ...current, to: id });
+  }, []);
+
+  const closePath = useCallback(() => {
+    setPathOpen(false);
+    setSelection(endpoints.from ? { kind: 'table', id: endpoints.from } : null);
+    setEndpoints({ from: '', to: '' });
+  }, [endpoints.from]);
+
+  useEffect(() => {
+    setEndpoints({ from: '', to: '' });
+    setPathOpen(false);
+  }, [activeModel]);
+
+  const fitPath = useCallback(() => {
+    if (path) flow?.fitView({ nodes: path.tableIds.map((id) => ({ id })), padding: 0.25, duration: 500, maxZoom: 1.2 });
+  }, [flow, path]);
+
+  useEffect(() => {
+    if (!pathOpen || (!choosingDestination && !path)) return;
+    // Wait for the inspector's canvas resize before fitting the route.
+    const timer = setTimeout(() => {
+      if (choosingDestination) flow?.fitView({ padding: 0.25, duration: 500, maxZoom: 1 });
+      else fitPath();
+    }, 280);
+    return () => clearTimeout(timer);
+  }, [pathOpen, path, fitPath, choosingDestination, flow]);
+
+  const openPath = (from) => {
+    clearTimeout(searchFocusTimer.current);
+    setEndpoints({ from, to: '' });
     setSelection(null);
-    setNodes(built.nodes);
-    setEdges(built.edges);
-    requestAnimationFrame(() => flow?.fitView({ padding: 0.15, duration: 500, maxZoom: 1 }));
-  }, [built, flow, setEdges, setNodes]);
+    setPathOpen(true);
+  };
 
   useEffect(() => {
     const connectedNodes = new Set();
     const connectedEdges = new Set();
-    if (selection?.kind === 'table') {
+    const tracingPath = pathOpen && !choosingDestination;
+    if (pathOpen) {
+      (path?.tableIds || [endpoints.from, endpoints.to].filter(Boolean)).forEach((id) => connectedNodes.add(id));
+      path?.steps.forEach((step) => connectedEdges.add(step.relationship.key));
+    } else if (selection?.kind === 'table') {
       connectedNodes.add(selection.id);
       built.relationships.forEach((relationship) => {
         if (relationship.source === selection.id || relationship.target === selection.id) {
@@ -337,52 +437,52 @@ function Explorer({ graph }) {
         connectedEdges.add(relationship.key);
       }
     }
-    setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, isSelected: selection?.kind === 'table' && node.id === selection.id, isDimmed: Boolean(selection) && !connectedNodes.has(node.id) } })));
+    setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, onSelectTable: choosingDestination ? chooseDestination : selectTable, choosingDestination, isSelected: pathOpen ? connectedNodes.has(node.id) : selection?.kind === 'table' && node.id === selection.id, isDimmed: (tracingPath || Boolean(selection)) && !connectedNodes.has(node.id) } })));
     setEdges((current) => current.map((edge) => {
       const active = connectedEdges.has(edge.id);
-      return { ...edge, animated: active, className: `${active ? 'is-active' : ''} ${selection && !active ? 'is-dimmed' : ''}`, label: selection?.kind === 'relationship' && edge.id === selection.id ? edge.data.relationship.label : undefined };
+      return { ...edge, animated: active, className: `${active ? 'is-active' : ''} ${(tracingPath || selection) && !active ? 'is-dimmed' : ''}`, label: selection?.kind === 'relationship' && edge.id === selection.id ? edge.data.relationship.label : undefined };
     }));
-  }, [selection, built.relationships, setEdges, setNodes]);
+  }, [selection, built.relationships, pathOpen, path, endpoints, choosingDestination, chooseDestination, selectTable, setEdges, setNodes]);
 
   useEffect(() => {
     const onKey = (event) => {
-      if (event.key === 'Escape') { setSelection(null); setQuery(''); }
-      if (event.key === '/' && document.activeElement !== searchRef.current) { event.preventDefault(); searchRef.current?.focus(); }
+      if (event.key === 'Escape' && !event.defaultPrevented) {
+        if (pathOpen) closePath();
+        else setSelection(null);
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, []);
+  }, [pathOpen, closePath]);
 
-  const results = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
-    if (!normalized) return [];
-    return built.tables.filter((table) => [displayName(table), table.name, ...table.columns.map((column) => column.name)].some((value) => String(value || '').toLocaleLowerCase().includes(normalized))).slice(0, 8);
-  }, [built.tables, query]);
+  useEffect(() => {
+    const timer = searchFocusTimer.current;
+    return () => clearTimeout(timer);
+  }, [selection, pathOpen]);
 
-  const focusTable = (table) => {
-    selectTable(table.id);
-    setQuery('');
-    flow?.fitView({ nodes: [{ id: table.id }], padding: 0.8, duration: 650, maxZoom: 1.25 });
+  const focusResult = (result) => {
+    if (choosingDestination) { chooseDestination(result.table.id); return; }
+    setPathOpen(false);
+    setSelection({ kind: 'table', id: result.table.id, column: result.column });
+    clearTimeout(searchFocusTimer.current);
+    // Fit after the inspector has resized the canvas.
+    searchFocusTimer.current = setTimeout(() => {
+      flow?.fitView({ nodes: [{ id: result.table.id }], padding: 0.8, duration: 650, maxZoom: 1.25 });
+    }, 280);
   };
 
   const title = graph.metadata.data_pool_name || graph.metadata.data_model_name || 'Celonis data model';
   return (
-    <main className={`app-shell ${selection ? 'has-inspector' : ''}`}>
+    <main className={`app-shell has-query-panel ${selection || pathOpen ? 'has-inspector' : ''}`} style={{ '--query-height': queryOpen ? `min(${queryHeight}px, 60dvh)` : '42px' }}>
       <header className="topbar">
         <div className="brand"><span className="brand__mark"><span></span><span></span><span></span></span><div><span>ERD explorer</span><h1>{title}</h1></div></div>
         <div className="topbar__stats"><span><strong>{built.tables.length}</strong> tables</span><span><strong>{built.relationships.length}</strong> relations</span></div>
         <a className="topbar__export" href="/api/graph.json" download="erd-celonis.json" title="Export the data model as JSON" aria-label="Export the data model as JSON"><Icon name="download" size={16}/><span className="topbar__export-label">Export JSON</span></a>
-        <div className="search-wrap">
-          <Icon name="search" size={17}/>
-          <input ref={searchRef} value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find table or column" aria-label="Find table or column" />
-          <kbd>/</kbd>
-          {results.length > 0 && <div className="search-results">{results.map((table) => <button type="button" key={table.id} onClick={() => focusTable(table)}><Icon name="table" size={15}/><span><strong>{displayName(table)}</strong><small>{table.data_model_name}</small></span></button>)}</div>}
-        </div>
+        <Search tables={built.tables} onSelect={focusResult} shortcut={!choosingDestination} onCancel={choosingDestination ? closePath : undefined}/>
       </header>
       <nav className="model-bar" aria-label="Data model filter">
         <Icon name="layers" size={16}/><span className="model-bar__label">Scope</span>
-        {models.length > 1 && <button type="button" className={activeModel === 'all' ? 'is-active' : ''} onClick={() => setActiveModel('all')}>All models</button>}
-        {models.map(([id, name]) => <button type="button" key={id} className={activeModel === id ? 'is-active' : ''} onClick={() => setActiveModel(id)}>{name}</button>)}
+        {models.map(([id, name]) => <button type="button" key={id} className={activeModel === id ? 'is-active' : ''} onClick={() => changeModel(id)}>{name}</button>)}
         <span className="model-bar__hint">Select a table to trace its neighborhood</span>
       </nav>
       <section className="canvas" aria-label="Entity relationship diagram">
@@ -393,12 +493,15 @@ function Explorer({ graph }) {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onInit={setFlow}
+          onNodeDragStop={saveView}
+          onSelectionDragStop={saveView}
+          onMoveEnd={saveView}
           onPaneClick={() => setSelection(null)}
-          onEdgeClick={(_event, edge) => setSelection({ kind: 'relationship', id: edge.id })}
-          fitView
-          fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
-          minZoom={0.08}
-          maxZoom={2}
+          onNodeClick={(event, node) => { if (choosingDestination && !event.target.closest('button')) chooseDestination(node.id); }}
+          onEdgeClick={(_event, edge) => { if (!choosingDestination) { setPathOpen(false); setSelection({ kind: 'relationship', id: edge.id }); } }}
+          defaultViewport={savedView?.viewport ?? { x: 0, y: 0, zoom: 1 }}
+          minZoom={MIN_ZOOM}
+          maxZoom={MAX_ZOOM}
           panOnScroll
           zoomOnScroll={false}
           zoomOnPinch
@@ -408,10 +511,13 @@ function Explorer({ graph }) {
           <Background color="#c7cfcc" gap={24} size={1} />
           <MiniMap nodeColor={(node) => node.data.isDimmed ? '#c9cfcc' : '#86bd67'} maskColor="rgba(238, 242, 241, .78)" pannable zoomable />
           <Controls showInteractive={false} />
-          <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span><span><Icon name="focus" size={14}/>Drag or two-finger pan · pinch zoom</span></div>
+          {choosingDestination ? <div className="canvas-prompt" role="status">Choose a table to connect with <strong>{displayName(startingTable)}</strong><button type="button" onClick={closePath}>Cancel</button></div> : <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span><span><Icon name="focus" size={14}/>Drag or two-finger pan · pinch zoom</span></div>}
         </ReactFlow>
       </section>
-      <DetailPanel selection={selection} graph={graph} onClose={() => setSelection(null)} onSelectTable={(id) => { selectTable(id); flow?.fitView({ nodes: [{ id }], padding: 0.7, duration: 500, maxZoom: 1.2 }); }} />
+      <QueryPanel poolId={graph.metadata.data_pool_id} modelId={activeModel} modelName={models.find(([id]) => id === activeModel)?.[1] || activeModel}
+        tables={built.tables} drafts={drafts} open={queryOpen} height={queryHeight} onToggle={() => setQueryOpen(value => !value)}
+        onResize={height => setQueryHeight(Math.max(220, Math.min(650, height)))}/>
+      {pathOpen ? <PathFinder tables={built.tables} from={endpoints.from} to={endpoints.to} onDestination={chooseDestination} onChangeDestination={() => setEndpoints((current) => ({ ...current, to: '' }))} result={path} onClose={closePath} onFit={fitPath} /> : <DetailPanel selection={selection} graph={graph} onClose={() => setSelection(null)} onFindPath={openPath} onSelectTable={(id) => { selectTable(id); flow?.fitView({ nodes: [{ id }], padding: 0.7, duration: 500, maxZoom: 1.2 }); }} />}
     </main>
   );
 }
@@ -426,7 +532,7 @@ function App() {
   }, []);
   if (state.loading) return <div className="state-screen"><span className="loader"></span><h1>Arranging the data model</h1><p>Placing tables and tracing foreign keys…</p></div>;
   if (state.error) return <div className="state-screen state-screen--error"><h1>The model could not be loaded</h1><p>{state.error}. Check the terminal that started this server, then refresh.</p><button type="button" onClick={() => window.location.reload()}>Try again</button></div>;
-  return <ReactFlowProvider><Explorer graph={state.graph}/></ReactFlowProvider>;
+  return <Diagram graph={state.graph}/>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

@@ -1,6 +1,12 @@
 from dataclasses import dataclass, field
+import sys
+from types import SimpleNamespace
+from unittest.mock import Mock
 
-from erd_celonis.cli import _StatusLine, _configured_key_type, first_data_model_id
+import pytest
+
+import erd_celonis.cli as cli
+from erd_celonis.cli import _StatusLine, _configured_key_type
 from erd_celonis.erd import (
     ERDGraph,
     _column_port_map,
@@ -230,23 +236,62 @@ def test_build_data_pool_graph_namespaces_models_and_can_select_one_model():
     assert {table.id for table in selected.tables} == {"model-b/table:table-b"}
 
 
-def test_first_data_model_id_returns_the_first_model():
-    class Pool:
-        def get_data_models(self):
-            return [DataModel("first", "First", [], []), DataModel("second", "Second", [], [])]
+def stub_cli_pool(monkeypatch, models):
+    pool = SimpleNamespace(
+        id="pool-id", name="Pool",
+        get_data_models=Mock(return_value=models),
+        get_data_model=Mock(side_effect=lambda model_id: next(model for model in models if model.id == model_id)),
+    )
+    get_pool = Mock(return_value=pool)
+    monkeypatch.setitem(sys.modules, "pycelonis", SimpleNamespace(
+        get_celonis=lambda **kwargs: SimpleNamespace(data_integration=SimpleNamespace(get_data_pool=get_pool)),
+    ))
+    monkeypatch.setitem(sys.modules, "dotenv", SimpleNamespace(
+        find_dotenv=lambda **kwargs: "", load_dotenv=lambda path: None,
+    ))
+    serve = Mock()
+    monkeypatch.setattr(cli, "serve_graph", serve)
+    return pool, get_pool, serve
 
-    assert first_data_model_id(Pool()) == "first"
+
+@pytest.mark.parametrize("model_count,selected_model,include_columns", [
+    (2, None, True), (2, None, False), (2, "model-1", True), (1, None, True),
+])
+def test_cli_loads_all_pool_models_unless_one_is_selected(monkeypatch, model_count, selected_model, include_columns):
+    models = [DataModel(f"model-{i}", f"Model {i}", [
+        Table("orders", "ORDERS", columns=[Column("ID")]),
+        Table("items", "ITEMS", columns=[Column("ORDER_ID")]),
+    ], [ForeignKey("join", "items", "orders", [ForeignKeyColumn("ORDER_ID", "ID")])]) for i in range(model_count)]
+    pool, get_pool, serve = stub_cli_pool(monkeypatch, models)
+    args = ["pool-id"] if selected_model is None else ["pool-id", selected_model]
+
+    cli.erd(*args, include_columns=include_columns, host="127.0.0.1", port=8123, open_browser=False)
+
+    get_pool.assert_called_once_with("pool-id")
+    serve.assert_called_once()
+    graph = serve.call_args.args[0]
+    expected_ids = {selected_model} if selected_model else {model.id for model in models}
+    assert {table.data_model_id for table in graph.tables} == expected_ids
+    assert {table.id for table in graph.tables} == {f"{model}/table:{table}" for model in expected_ids for table in ["orders", "items"]}
+    assert {edge.key for edge in graph.relationships} == {f"{model}/join" for model in expected_ids}
+    assert all(bool(table.columns) == include_columns for table in graph.tables)
+    options = serve.call_args.kwargs
+    assert {key: options[key] for key in ["host", "port", "open_browser"]} == {"host": "127.0.0.1", "port": 8123, "open_browser": False}
+    assert options["query_runner"].data_pool is pool
+    assert options["query_runner"].model_ids == expected_ids
+    if selected_model is None:
+        pool.get_data_models.assert_called_once_with()
+        pool.get_data_model.assert_not_called()
+    else:
+        pool.get_data_model.assert_called_once_with(selected_model)
+        pool.get_data_models.assert_not_called()
 
 
-def test_first_data_model_id_rejects_an_empty_pool():
-    class Pool:
-        def get_data_models(self):
-            return []
-
-    import pytest
-
+def test_cli_rejects_empty_pool_before_starting_server(monkeypatch):
+    _, _, serve = stub_cli_pool(monkeypatch, [])
     with pytest.raises(ValueError, match="contains no data models"):
-        first_data_model_id(Pool())
+        cli.erd("pool-id")
+    serve.assert_not_called()
 
 
 def test_configured_key_type_is_explicit_and_can_be_overridden(monkeypatch):
