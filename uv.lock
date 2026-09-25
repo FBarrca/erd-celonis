@@ -26,7 +26,7 @@ wheels = [
 [[package]]
 name = "celofast"
 version = "0.6.1"
-source = { directory = "../celofast" }
+source = { git = "https://github.com/FBarrca/celofast#ad017b403c3ad032c520c9b603320b3a6029c172" }
 dependencies = [
     { name = "numpy" },
     { name = "pandas" },
@@ -38,28 +38,6 @@ dependencies = [
     { name = "rich" },
     { name = "saolapy" },
     { name = "typing-extensions" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "numpy", specifier = ">=1.23.5,<3.0" },
-    { name = "pandas", specifier = ">=1.5.2,<3.0" },
-    { name = "pycelonis", url = "https://pypi.celonis.cloud/pycelonis/pycelonis-2.15.1-py3-none-any.whl" },
-    { name = "pycelonis-core", url = "https://pypi.celonis.cloud/pycelonis-core/pycelonis_core-2.10.4-py3-none-any.whl" },
-    { name = "pydantic", specifier = ">=2.0,<3.0" },
-    { name = "python-dotenv", specifier = ">=1.0,<2.0" },
-    { name = "pyyaml", specifier = ">=6.0,<7.0" },
-    { name = "rich", specifier = ">=13.0,<16.0" },
-    { name = "saolapy", url = "https://pypi.celonis.cloud/saolapy/saolapy-0.3.3-py3-none-any.whl" },
-    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
-    { name = "typing-extensions", specifier = ">=4.6,<5.0" },
-]
-
-[package.metadata.requires-dev]
-dev = [
-    { name = "mypy", specifier = ">=1.15,<3" },
-    { name = "pytest", specifier = ">=8.0,<9.0" },
-    { name = "pytest-asyncio", specifier = ">=0.23,<1.0" },
 ]
 
 [[package]]
@@ -103,7 +81,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "celofast", directory = "../celofast" },
+    { name = "celofast", git = "https://github.com/FBarrca/celofast" },
     { name = "fire", specifier = ">=0.7.1" },
     { name = "graphviz", specifier = ">=0.20,<1.0" },
     { name = "pycelonis", specifier = ">=2.12,<3.0", index = "https://pypi.celonis.cloud/" },
@@ -367,8 +345,8 @@ wheels = [
 
 [[package]]
 name = "pycelonis"
-version = "2.15.1"
-source = { url = "https://pypi.celonis.cloud/pycelonis/pycelonis-2.15.1-py3-none-any.whl" }
+version = "2.16.1"
+source = { git = "https://github.com/celonis/pycelonis.git?subdirectory=pycelonis&rev=86f144b#86f144b7046120ab251fd33cc53512a690bad487" }
 dependencies = [
     { name = "packaging" },
     { name = "pandas" },
@@ -378,24 +356,6 @@ dependencies = [
     { name = "saolapy" },
     { name = "tqdm" },
 ]
-wheels = [
-    { url = "https://pypi.celonis.cloud/pycelonis/pycelonis-2.15.1-py3-none-any.whl", hash = "sha256:d52b7316683cee62668b02703ab3b53b9b915702dcc60efe79ca4afb2d623b6f" },
-]
-
-[package.metadata]
-requires-dist = [
-    { name = "ddtrace", marker = "extra == 'mlwb'", specifier = ">=1.5.5,<2.5.1" },
-    { name = "packaging" },
-    { name = "pandas", specifier = ">=1.4.0" },
-    { name = "psutil", marker = "extra == 'mlwb'" },
-    { name = "pyarrow", specifier = ">=8.0.0" },
-    { name = "pycelonis-core", specifier = ">=2.10.4" },
-    { name = "python-json-logger", marker = "extra == 'mlwb'" },
-    { name = "pyyaml" },
-    { name = "saolapy", specifier = ">=0.3.3.dev0" },
-    { name = "tqdm", specifier = ">=4.64.0" },
-]
-provides-extras = ["mlwb"]
 
 [[package]]
 name = "pycelonis-core"
