@@ -38,7 +38,7 @@ function Icon({ name, size = 18 }) {
     close: <><path d="m6 6 12 12"/><path d="m18 6-12 12"/></>,
     table: <><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M8 9v11"/></>,
     link: <><path d="M10 13a5 5 0 0 0 7.1.1l2-2a5 5 0 0 0-7.1-7.1l-1.1 1.1"/><path d="M14 11a5 5 0 0 0-7.1-.1l-2 2A5 5 0 0 0 12 20l1.1-1.1"/></>,
-    focus: <><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/><circle cx="12" cy="12" r="3"/></>,
+    chevron: <path d="m8 10 4 4 4-4"/>,
     arrow: <><path d="M5 12h14M13 6l6 6-6 6"/></>,
     layers: <><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></>,
   };
@@ -315,14 +315,15 @@ function Diagram({ graph }) {
   const [drafts] = useState(() => createDraftStore());
   const [queryOpen, setQueryOpen] = useState(true);
   const [queryHeight, setQueryHeight] = useState(440);
+  const restoreScopeFocus = useRef(false);
   const models = useMemo(() => [...new Map(graph.tables.map((table) => [modelId(graph, table), table.data_model_name || graph.metadata.data_model_name || modelId(graph, table)])).entries()], [graph]);
   const [activeModel, setActiveModel] = useState(() => views.loadScope(graph));
   // Each scope owns its React Flow lifecycle, including pending viewport animations.
   return <ReactFlowProvider key={activeModel}><Explorer graph={graph} models={models} activeModel={activeModel} setActiveModel={setActiveModel} views={views}
-    drafts={drafts} queryOpen={queryOpen} setQueryOpen={setQueryOpen} queryHeight={queryHeight} setQueryHeight={setQueryHeight}/></ReactFlowProvider>;
+    drafts={drafts} restoreScopeFocus={restoreScopeFocus} queryOpen={queryOpen} setQueryOpen={setQueryOpen} queryHeight={queryHeight} setQueryHeight={setQueryHeight}/></ReactFlowProvider>;
 }
 
-function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, queryOpen, setQueryOpen, queryHeight, setQueryHeight }) {
+function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, restoreScopeFocus, queryOpen, setQueryOpen, queryHeight, setQueryHeight }) {
   const [savedView] = useState(() => views.load(graph, activeModel));
   const [selection, setSelection] = useState(null);
   const [pathOpen, setPathOpen] = useState(false);
@@ -330,6 +331,13 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, q
   const [flow, setFlow] = useState(null);
   const searchFocusTimer = useRef(null);
   const viewReady = useRef(false);
+  const scopeSelect = useRef(null);
+  useEffect(() => {
+    if (restoreScopeFocus.current) {
+      scopeSelect.current?.focus();
+      restoreScopeFocus.current = false;
+    }
+  }, [restoreScopeFocus]);
   const nodesInitialized = useNodesInitialized();
   const selectTable = useCallback((id) => { setPathOpen(false); setSelection({ kind: 'table', id }); }, []);
   const built = useMemo(() => {
@@ -348,6 +356,7 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, q
 
   const changeModel = (id) => {
     if (id === activeModel) return;
+    restoreScopeFocus.current = document.activeElement === scopeSelect.current;
     saveView();
     viewReady.current = false;
     views.saveScope(graph, id);
@@ -474,15 +483,19 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, q
   return (
     <main className={`app-shell has-query-panel ${selection || pathOpen ? 'has-inspector' : ''}`} style={{ '--query-height': queryOpen ? `min(${queryHeight}px, 60dvh)` : '42px' }}>
       <header className="topbar">
-        <div className="brand"><span className="brand__mark"><span></span><span></span><span></span></span><div><span>ERD explorer</span><h1>{title}</h1></div></div>
+        <div className="brand"><span className="brand__mark" aria-hidden="true"><span></span><span></span><span></span></span><div><span>ERD Explorer</span><h1 title={title}>{title}</h1></div></div>
+        <label className="scope-control">
+          <Icon name="layers" size={16}/>
+          <span className="scope-control__field"><span>Data model</span>
+            <select ref={scopeSelect} aria-label="Data model scope" value={activeModel} onChange={(event) => changeModel(event.target.value)} title={models.find(([id]) => id === activeModel)?.[1]}>
+              {models.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select>
+          </span>
+          <Icon name="chevron" size={16}/>
+        </label>
         <div className="topbar__stats"><span><strong>{built.tables.length}</strong> tables</span><span><strong>{built.relationships.length}</strong> relations</span></div>
         <Search tables={built.tables} onSelect={focusResult} shortcut={!choosingDestination} onCancel={choosingDestination ? closePath : undefined}/>
       </header>
-      <nav className="model-bar" aria-label="Data model filter">
-        <Icon name="layers" size={16}/><span className="model-bar__label">Scope</span>
-        {models.map(([id, name]) => <button type="button" key={id} className={activeModel === id ? 'is-active' : ''} onClick={() => changeModel(id)}>{name}</button>)}
-        <span className="model-bar__hint">Select a table to trace its neighborhood</span>
-      </nav>
       <section className="canvas" aria-label="Entity relationship diagram">
         <ReactFlow
           nodes={nodes}
@@ -509,7 +522,7 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, q
           <Background color="#c7cfcc" gap={24} size={1} />
           <MiniMap nodeColor={(node) => node.data.isDimmed ? '#c9cfcc' : '#86bd67'} maskColor="rgba(238, 242, 241, .78)" pannable zoomable />
           <Controls showInteractive={false} />
-          {choosingDestination ? <div className="canvas-prompt" role="status">Choose a table to connect with <strong>{displayName(startingTable)}</strong><button type="button" onClick={closePath}>Cancel</button></div> : <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span><span><Icon name="focus" size={14}/>Drag or two-finger pan · pinch zoom</span></div>}
+          {choosingDestination ? <div className="canvas-prompt" role="status">Choose a table to connect with <strong>{displayName(startingTable)}</strong><button type="button" onClick={closePath}>Cancel</button></div> : <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span></div>}
         </ReactFlow>
       </section>
       <QueryPanel poolId={graph.metadata.data_pool_id} modelId={activeModel} modelName={models.find(([id]) => id === activeModel)?.[1] || activeModel}
