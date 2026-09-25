@@ -13,7 +13,9 @@ The explorer provides:
 - search across table and column names;
 - export the loaded data model as a JSON file;
 - table and relationship inspectors with exact column mappings;
-- a relationship lens that fades unrelated parts of the model; and
+- a relationship lens that fades unrelated parts of the model;
+- a shortest-path finder between two tables, with intermediate tables and exact
+  join columns (including composite keys); and
 - a responsive inspector for desktop and mobile browsers.
 
 ## Install
@@ -82,6 +84,20 @@ expose the explorer on your network. The server is read-only and makes no
 browser-side Celonis requests; the graph is fetched once by the CLI and served
 from memory.
 
+### Find a path between tables
+
+Click **Find path** in the scope bar and choose a **From table** and **To table**.
+You can also open a table's inspector and choose **Find a path from this table**.
+The explorer highlights one shortest route, fits it on the canvas, and lists
+every table and join-column pair along the way. Relationships can be traversed
+in either direction; all columns of a composite relationship are shown together.
+The route describes schema connectivity, not a guarantee that a PQL join is valid.
+
+Use **Swap tables** to reverse the route, **Fit route** to recenter it, or
+**Clear** to choose new endpoints. Disconnected tables show a **No path found**
+explanation for the loaded scope. Changing model scope clears the endpoints;
+closing the panel or pressing Escape returns to normal inspection.
+
 ## Develop
 
 Set up the Python project and run its tests:
@@ -97,6 +113,7 @@ source:
 ```bash
 cd frontend
 npm install
+npm test
 npm run build
 ```
 

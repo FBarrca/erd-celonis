@@ -15,6 +15,8 @@ import {
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
 import './styles.css';
+import { findPath } from './findPath';
+import PathFinder from './PathFinder';
 
 const NODE_WIDTH = 286;
 const ROW_HEIGHT = 31;
@@ -231,7 +233,7 @@ function buildElements(graph, activeModel, onSelectTable) {
   return { nodes, edges, tables, relationships };
 }
 
-function DetailPanel({ selection, graph, onClose, onSelectTable }) {
+function DetailPanel({ selection, graph, onClose, onSelectTable, onFindPath }) {
   if (!selection) return null;
   const tableById = new Map(graph.tables.map((table) => [table.id, table]));
   if (selection.kind === 'relationship') {
@@ -272,6 +274,7 @@ function DetailPanel({ selection, graph, onClose, onSelectTable }) {
       <InspectorHeader eyebrow={table.is_augmented ? 'Augmented table' : table.data_model_name || 'Table'} title={displayName(table)} onClose={onClose} />
       <div className="inspector__body">
         <div className="facts"><span><strong>{table.columns.length}</strong> columns</span><span><strong>{connected.length}</strong> relationships</span></div>
+        <button className="path-start" type="button" onClick={() => onFindPath(table.id)}>Find a path from this table</button>
         <section className="inspector__section">
           <h3>Columns</h3>
           <div className="inspector-columns">
@@ -304,13 +307,37 @@ function Explorer({ graph }) {
   const models = useMemo(() => [...new Map(graph.tables.map((table) => [String(table.data_model_id), table.data_model_name || table.data_model_id])).entries()], [graph]);
   const [activeModel, setActiveModel] = useState(models.length === 1 ? models[0][0] : 'all');
   const [selection, setSelection] = useState(null);
+  const [pathOpen, setPathOpen] = useState(false);
+  const [endpoints, setEndpoints] = useState({ from: '', to: '' });
   const [query, setQuery] = useState('');
   const [flow, setFlow] = useState(null);
   const searchRef = useRef(null);
-  const selectTable = useCallback((id) => setSelection({ kind: 'table', id }), []);
+  const selectTable = useCallback((id) => { setPathOpen(false); setSelection({ kind: 'table', id }); }, []);
   const built = useMemo(() => buildElements(graph, activeModel, selectTable), [graph, activeModel, selectTable]);
+  const path = useMemo(() => findPath(built.tables, built.relationships, endpoints.from, endpoints.to), [built, endpoints]);
   const [nodes, setNodes, onNodesChange] = useNodesState(built.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(built.edges);
+
+  useEffect(() => {
+    setEndpoints({ from: '', to: '' });
+  }, [activeModel]);
+
+  const fitPath = useCallback(() => {
+    if (path) flow?.fitView({ nodes: path.tableIds.map((id) => ({ id })), padding: 0.25, duration: 500, maxZoom: 1.2 });
+  }, [flow, path]);
+
+  useEffect(() => {
+    if (!pathOpen || !path) return;
+    // Wait for the inspector's canvas resize before fitting the route.
+    const timer = setTimeout(fitPath, 280);
+    return () => clearTimeout(timer);
+  }, [pathOpen, path, fitPath]);
+
+  const openPath = (from) => {
+    if (from) setEndpoints({ from, to: '' });
+    setSelection(null);
+    setPathOpen(true);
+  };
 
   useEffect(() => {
     setSelection(null);
@@ -322,7 +349,11 @@ function Explorer({ graph }) {
   useEffect(() => {
     const connectedNodes = new Set();
     const connectedEdges = new Set();
-    if (selection?.kind === 'table') {
+    const tracingPath = pathOpen && Boolean(endpoints.from || endpoints.to);
+    if (pathOpen) {
+      (path?.tableIds || [endpoints.from, endpoints.to].filter(Boolean)).forEach((id) => connectedNodes.add(id));
+      path?.steps.forEach((step) => connectedEdges.add(step.relationship.key));
+    } else if (selection?.kind === 'table') {
       connectedNodes.add(selection.id);
       built.relationships.forEach((relationship) => {
         if (relationship.source === selection.id || relationship.target === selection.id) {
@@ -339,16 +370,16 @@ function Explorer({ graph }) {
         connectedEdges.add(relationship.key);
       }
     }
-    setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, isSelected: selection?.kind === 'table' && node.id === selection.id, isDimmed: Boolean(selection) && !connectedNodes.has(node.id) } })));
+    setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, isSelected: pathOpen ? connectedNodes.has(node.id) : selection?.kind === 'table' && node.id === selection.id, isDimmed: (tracingPath || Boolean(selection)) && !connectedNodes.has(node.id) } })));
     setEdges((current) => current.map((edge) => {
       const active = connectedEdges.has(edge.id);
-      return { ...edge, animated: active, className: `${active ? 'is-active' : ''} ${selection && !active ? 'is-dimmed' : ''}`, label: selection?.kind === 'relationship' && edge.id === selection.id ? edge.data.relationship.label : undefined };
+      return { ...edge, animated: active, className: `${active ? 'is-active' : ''} ${(tracingPath || selection) && !active ? 'is-dimmed' : ''}`, label: selection?.kind === 'relationship' && edge.id === selection.id ? edge.data.relationship.label : undefined };
     }));
-  }, [selection, built.relationships, setEdges, setNodes]);
+  }, [selection, built.relationships, pathOpen, path, endpoints, setEdges, setNodes]);
 
   useEffect(() => {
     const onKey = (event) => {
-      if (event.key === 'Escape') { setSelection(null); setQuery(''); }
+      if (event.key === 'Escape') { setSelection(null); setQuery(''); setPathOpen(false); }
       if (event.key === '/' && document.activeElement !== searchRef.current) { event.preventDefault(); searchRef.current?.focus(); }
     };
     window.addEventListener('keydown', onKey);
@@ -369,7 +400,7 @@ function Explorer({ graph }) {
 
   const title = graph.metadata.data_pool_name || graph.metadata.data_model_name || 'Celonis data model';
   return (
-    <main className={`app-shell ${selection ? 'has-inspector' : ''}`}>
+    <main className={`app-shell ${selection || pathOpen ? 'has-inspector' : ''}`}>
       <header className="topbar">
         <div className="brand"><span className="brand__mark"><span></span><span></span><span></span></span><div><span>ERD explorer</span><h1>{title}</h1></div></div>
         <div className="topbar__stats"><span><strong>{built.tables.length}</strong> tables</span><span><strong>{built.relationships.length}</strong> relations</span></div>
@@ -385,6 +416,7 @@ function Explorer({ graph }) {
         <Icon name="layers" size={16}/><span className="model-bar__label">Scope</span>
         {models.length > 1 && <button type="button" className={activeModel === 'all' ? 'is-active' : ''} onClick={() => setActiveModel('all')}>All models</button>}
         {models.map(([id, name]) => <button type="button" key={id} className={activeModel === id ? 'is-active' : ''} onClick={() => setActiveModel(id)}>{name}</button>)}
+        <button type="button" className={`model-bar__path ${pathOpen ? 'is-active' : ''}`} aria-pressed={pathOpen} onClick={() => pathOpen ? setPathOpen(false) : openPath(selection?.kind === 'table' ? selection.id : undefined)}><Icon name="link" size={14}/>Find path</button>
         <span className="model-bar__hint">Select a table to trace its neighborhood</span>
       </nav>
       <section className="canvas" aria-label="Entity relationship diagram">
@@ -396,7 +428,7 @@ function Explorer({ graph }) {
           onEdgesChange={onEdgesChange}
           onInit={setFlow}
           onPaneClick={() => setSelection(null)}
-          onEdgeClick={(_event, edge) => setSelection({ kind: 'relationship', id: edge.id })}
+          onEdgeClick={(_event, edge) => { setPathOpen(false); setSelection({ kind: 'relationship', id: edge.id }); }}
           fitView
           fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
           minZoom={0.08}
@@ -413,7 +445,7 @@ function Explorer({ graph }) {
           <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span><span><i className="dot dot--augmented"></i>Augmented table</span><span><Icon name="focus" size={14}/>Drag or two-finger pan · pinch zoom</span></div>
         </ReactFlow>
       </section>
-      <DetailPanel selection={selection} graph={graph} onClose={() => setSelection(null)} onSelectTable={(id) => { selectTable(id); flow?.fitView({ nodes: [{ id }], padding: 0.7, duration: 500, maxZoom: 1.2 }); }} />
+      {pathOpen ? <PathFinder tables={built.tables} from={endpoints.from} to={endpoints.to} onChange={(from, to) => setEndpoints({ from, to })} result={path} onClose={() => setPathOpen(false)} onFit={fitPath} /> : <DetailPanel selection={selection} graph={graph} onClose={() => setSelection(null)} onFindPath={openPath} onSelectTable={(id) => { selectTable(id); flow?.fitView({ nodes: [{ id }], padding: 0.7, duration: 500, maxZoom: 1.2 }); }} />}
     </main>
   );
 }
