@@ -18,7 +18,7 @@ function keyFor(graph, scope, preference = false) {
   return PREFIX + JSON.stringify([
     pool,
     preference ? 'scope' : 'layout',
-    preference ? (pool ? [] : ids) : scope === 'all' ? ids : [scope],
+    preference ? (pool ? [] : ids) : [scope],
     preference ? null : scope,
   ]);
 }
@@ -61,9 +61,9 @@ export function createViewStore(getStorage = () => window.localStorage) {
     },
     loadScope(graph) {
       const ids = modelIds(graph);
-      const fallback = ids.length === 1 ? ids[0] : 'all';
+      const fallback = graph.tables.length ? modelId(graph, graph.tables[0]) : '';
       const record = read(keyFor(graph, null, true));
-      return record?.version === 1 && (ids.includes(record.scope) || (record.scope === 'all' && ids.length > 1)) ? record.scope : fallback;
+      return record?.version === 1 && ids.includes(record.scope) ? record.scope : fallback;
     },
     saveScope(graph, scope) { write(keyFor(graph, null, true), { version: 1, scope }); },
   };

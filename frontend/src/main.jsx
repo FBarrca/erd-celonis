@@ -187,7 +187,7 @@ function relationshipAwarePositions(layout, tables, columnMap) {
 }
 
 function buildElements(graph, activeModel, onSelectTable) {
-  const tables = activeModel === 'all' ? graph.tables : graph.tables.filter((table) => modelId(graph, table) === activeModel);
+  const tables = graph.tables.filter((table) => modelId(graph, table) === activeModel);
   const tableIds = new Set(tables.map((table) => table.id));
   const relationships = graph.relationships.filter((relationship) => tableIds.has(relationship.source) && tableIds.has(relationship.target));
   const foreignByTable = new Map(tables.map((table) => [table.id, new Set()]));
@@ -478,7 +478,6 @@ function Explorer({ graph, models, activeModel, setActiveModel, views }) {
       </header>
       <nav className="model-bar" aria-label="Data model filter">
         <Icon name="layers" size={16}/><span className="model-bar__label">Scope</span>
-        {models.length > 1 && <button type="button" className={activeModel === 'all' ? 'is-active' : ''} onClick={() => changeModel('all')}>All models</button>}
         {models.map(([id, name]) => <button type="button" key={id} className={activeModel === id ? 'is-active' : ''} onClick={() => changeModel(id)}>{name}</button>)}
         <span className="model-bar__hint">Select a table to trace its neighborhood</span>
       </nav>

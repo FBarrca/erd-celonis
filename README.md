@@ -56,8 +56,8 @@ erd-celonis "<data-pool-id>"
 ```
 
 The command opens the explorer at `http://127.0.0.1:8000` and keeps running
-until you press `Ctrl+C`. Use the **Scope** buttons to view **All models** or
-select an individual model. A previously saved scope is restored when available.
+until you press `Ctrl+C`. Each model has its own tab in the **Scope** bar.
+The last selected model opens when available; otherwise, the first model opens.
 
 Select a particular data model with the second positional argument:
 
@@ -92,8 +92,8 @@ from memory.
 Table positions, pan, and zoom are saved automatically in browser local storage.
 Reopening the same data model restores its latest view, including after stopping
 and restarting the server. Views are matched by Celonis pool and model IDs, so
-renaming a model does not lose its layout. Each model scope and **All models**
-has its own view, and the last valid scope is restored when reopening.
+renaming a model does not lose its layout. Each model tab has its own view,
+and the last selected model is restored when reopening, if still available.
 
 Existing tables keep their saved positions when the schema changes. New tables
 appear to the right of the saved arrangement. Search text, inspectors, selections,
