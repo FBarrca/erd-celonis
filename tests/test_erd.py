@@ -297,7 +297,10 @@ def test_cli_loads_all_pool_models_unless_one_is_selected(monkeypatch, model_cou
     assert {table.id for table in graph.tables} == {f"{model}/table:{table}" for model in expected_ids for table in ["orders", "items"]}
     assert {edge.key for edge in graph.relationships} == {f"{model}/join" for model in expected_ids}
     assert all(bool(table.columns) == include_columns for table in graph.tables)
-    assert serve.call_args.kwargs == {"host": "127.0.0.1", "port": 8123, "open_browser": False}
+    options = serve.call_args.kwargs
+    assert {key: options[key] for key in ["host", "port", "open_browser"]} == {"host": "127.0.0.1", "port": 8123, "open_browser": False}
+    assert options["query_runner"].data_pool is pool
+    assert options["query_runner"].model_ids == expected_ids
     if selected_model is None:
         pool.get_data_models.assert_called_once_with()
         pool.get_data_model.assert_not_called()

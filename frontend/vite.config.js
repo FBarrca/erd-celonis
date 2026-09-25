@@ -8,6 +8,9 @@ export default defineConfig({
     outDir: '../erd_celonis/static',
     emptyOutDir: true,
     assetsDir: 'assets',
+    rollupOptions: {
+      output: { manualChunks: id => /node_modules[\\/](@codemirror|@lezer)[\\/]/.test(id) ? 'editor' : undefined },
+    },
   },
   server: {
     proxy: {

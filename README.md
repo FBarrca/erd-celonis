@@ -11,6 +11,7 @@ The explorer provides:
   tables above their dependants and spreads each rank across the canvas;
 - drag or two-finger trackpad pan, pinch zoom, minimap, and draggable table cards;
 - automatic saving of table positions, pan, zoom, and the last selected model scope;
+- a resizable PQL console with syntax highlighting, schema autocomplete, per-model drafts, query results, and CSV export;
 - typo-tolerant search powered by Fuse.js across table aliases, physical names,
   and individual columns in the selected model scope, with highlighted matches;
 - export the loaded data model as a JSON file;
@@ -83,9 +84,74 @@ erd-celonis "<data-pool-id>" --include_columns=False
 
 The server binds to `127.0.0.1` by default, so only the local machine can
 access the schema. Use `--host=0.0.0.0` only when you intentionally want to
-expose the explorer on your network. The server is read-only and makes no
-browser-side Celonis requests; the graph is fetched once by the CLI and served
-from memory.
+expose the explorer and its query access on your network. The graph is fetched
+once by the CLI and served from memory. PQL queries use that CLI's authenticated
+connection and permissions; Celonis credentials remain on the Python server.
+
+### Run PQL queries
+
+The **PQL console** at the bottom runs against the selected model tab. Write one
+PQL script in the editor and view the resulting DataFrame below it. Use the
+header's expand icon for a larger workspace, or **Load example** for a query
+using the active model. The chevron collapses or reopens the console; icons have
+tooltips and accessible labels.
+
+```pql
+FILTER "Orders"."AMOUNT" > 100;
+
+TABLE(
+  "Orders"."CUSTOMER_ID" AS "Customer",
+  SUM("Orders"."AMOUNT") AS "Total amount"
+);
+```
+
+Put output expressions inside `TABLE(...)`, separated by commas, and name them
+with `AS "Name"`. Simple column references can omit the alias; other unnamed
+expressions receive names such as `Column 1`. Write `FILTER ...;` statements before
+or after `TABLE`, or use **+ Filter** to insert a filter template. Use
+`TABLE(DISTINCT ...)` to remove duplicate result rows. The console supports one
+TABLE query, up to 100 expressions and 20 filters, and optional `LIMIT` after
+TABLE. It does not accept SQL SELECT, ORDER BY, OFFSET, or Python statements.
+
+Use **Insert table or column** to search the selected model's schema and insert
+a quoted reference at the cursor. Table aliases are used when present.
+
+The editor uses **CodeMirror 6**, bundled with the app, with PQL
+syntax highlighting, line numbers, bracket matching, and undo/redo. Suggestions
+appear as you type; **Ctrl+Space** opens them explicitly. They include the active
+model's tables and columns plus common PQL functions and snippets. After
+`"Orders".`, only that table's columns are suggested. References use quoted aliases
+and preserve the schema's spelling. Suggestions use metadata already loaded by
+the explorer; they do not make additional Celonis requests.
+
+Use **↑/↓** to choose a suggestion, **Enter** to insert it, and **Escape** to dismiss
+the menu. **Tab** moves through active snippet arguments, or moves focus normally
+when no snippet is active. Undo history and the cursor are retained when the
+panel is collapsed. Scripts are limited to 65,536 characters, with at most 8,192
+characters per expression or filter. Highlighting and the
+curated function catalog assist editing; Celonis validates the query when it runs.
+
+Choose **Run** or press **Ctrl+Enter** (**Cmd+Enter** on macOS). Results
+show column types, elapsed time, and 100 rows per page. Click a column heading
+to sort the returned rows. Queries default to 1,000 rows, with a maximum of
+10,000; reaching the limit does not indicate the total number of matching rows.
+An explicit `LIMIT 100;` after TABLE overrides the toolbar's row limit.
+
+**Download CSV** exports the returned result set. Formula-like text is prefixed
+with an apostrophe for spreadsheet safety.
+
+Drag the panel's upper divider (or focus it and use the arrow keys) to resize it;
+use the header chevron to collapse it. Drafts, including unfinished edits, save
+automatically per pool and model in browser local storage. Existing drafts from
+the expression/filter form are converted into scripts when opened. Results are
+held only in memory and cleared on model
+switches or reloads. Leaving the model stops waiting for its result, but does not
+cancel work already submitted to Celonis. The server runs one query at a time.
+
+Queries use the data model directly. Analysis/Knowledge Model variables and
+saved KPIs that require a separate query environment are not resolved by this
+editor. Large integer IDs and decimals are displayed as strings to preserve
+precision; dates use ISO text and missing values display as `NULL`.
 
 ### Remember diagram views
 

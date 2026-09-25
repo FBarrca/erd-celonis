@@ -17,6 +17,7 @@ from rich.progress import (
 from rich.status import Status
 
 from .erd import build_data_pool_graph
+from .query import QueryRunner
 from .web import serve_graph
 
 
@@ -184,7 +185,8 @@ def erd(
         status.close()
 
     print(f"Loaded {graph.number_of_nodes()} tables and {graph.number_of_edges()} relationships.")
-    serve_graph(graph, host=host, port=port, open_browser=open_browser)
+    query_runner = QueryRunner(data_pool, {str(table.data_model_id) for table in graph.tables})
+    serve_graph(graph, host=host, port=port, open_browser=open_browser, query_runner=query_runner)
 
 
 def main() -> None:

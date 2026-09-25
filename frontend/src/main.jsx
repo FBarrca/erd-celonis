@@ -19,6 +19,8 @@ import './styles.css';
 import { findPath } from './findPath';
 import PathFinder from './PathFinder';
 import Search from './Search.jsx';
+import QueryPanel from './QueryPanel.jsx';
+import { createDraftStore } from './queryDrafts.js';
 import { createViewStore, modelId, restorePositions, MIN_ZOOM, MAX_ZOOM } from './savedViews.js';
 
 const NODE_WIDTH = 286;
@@ -313,13 +315,17 @@ function InspectorHeader({ eyebrow, title, onClose }) {
 
 function Diagram({ graph }) {
   const [views] = useState(() => createViewStore());
+  const [drafts] = useState(() => createDraftStore());
+  const [queryOpen, setQueryOpen] = useState(true);
+  const [queryHeight, setQueryHeight] = useState(440);
   const models = useMemo(() => [...new Map(graph.tables.map((table) => [modelId(graph, table), table.data_model_name || graph.metadata.data_model_name || modelId(graph, table)])).entries()], [graph]);
   const [activeModel, setActiveModel] = useState(() => views.loadScope(graph));
   // Each scope owns its React Flow lifecycle, including pending viewport animations.
-  return <ReactFlowProvider key={activeModel}><Explorer graph={graph} models={models} activeModel={activeModel} setActiveModel={setActiveModel} views={views}/></ReactFlowProvider>;
+  return <ReactFlowProvider key={activeModel}><Explorer graph={graph} models={models} activeModel={activeModel} setActiveModel={setActiveModel} views={views}
+    drafts={drafts} queryOpen={queryOpen} setQueryOpen={setQueryOpen} queryHeight={queryHeight} setQueryHeight={setQueryHeight}/></ReactFlowProvider>;
 }
 
-function Explorer({ graph, models, activeModel, setActiveModel, views }) {
+function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, queryOpen, setQueryOpen, queryHeight, setQueryHeight }) {
   const [savedView] = useState(() => views.load(graph, activeModel));
   const [selection, setSelection] = useState(null);
   const [pathOpen, setPathOpen] = useState(false);
@@ -469,7 +475,7 @@ function Explorer({ graph, models, activeModel, setActiveModel, views }) {
 
   const title = graph.metadata.data_pool_name || graph.metadata.data_model_name || 'Celonis data model';
   return (
-    <main className={`app-shell ${selection || pathOpen ? 'has-inspector' : ''}`}>
+    <main className={`app-shell has-query-panel ${selection || pathOpen ? 'has-inspector' : ''}`} style={{ '--query-height': queryOpen ? `min(${queryHeight}px, 60dvh)` : '42px' }}>
       <header className="topbar">
         <div className="brand"><span className="brand__mark"><span></span><span></span><span></span></span><div><span>ERD explorer</span><h1>{title}</h1></div></div>
         <div className="topbar__stats"><span><strong>{built.tables.length}</strong> tables</span><span><strong>{built.relationships.length}</strong> relations</span></div>
@@ -510,6 +516,9 @@ function Explorer({ graph, models, activeModel, setActiveModel, views }) {
           {choosingDestination ? <div className="canvas-prompt" role="status">Choose a table to connect with <strong>{displayName(startingTable)}</strong><button type="button" onClick={closePath}>Cancel</button></div> : <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span><span><i className="dot dot--augmented"></i>Augmented table</span><span><Icon name="focus" size={14}/>Drag or two-finger pan · pinch zoom</span></div>}
         </ReactFlow>
       </section>
+      <QueryPanel poolId={graph.metadata.data_pool_id} modelId={activeModel} modelName={models.find(([id]) => id === activeModel)?.[1] || activeModel}
+        tables={built.tables} drafts={drafts} open={queryOpen} height={queryHeight} onToggle={() => setQueryOpen(value => !value)}
+        onResize={height => setQueryHeight(Math.max(220, Math.min(650, height)))}/>
       {pathOpen ? <PathFinder tables={built.tables} from={endpoints.from} to={endpoints.to} onDestination={chooseDestination} onChangeDestination={() => setEndpoints((current) => ({ ...current, to: '' }))} result={path} onClose={closePath} onFit={fitPath} /> : <DetailPanel selection={selection} graph={graph} onClose={() => setSelection(null)} onFindPath={openPath} onSelectTable={(id) => { selectTable(id); flow?.fitView({ nodes: [{ id }], padding: 0.7, duration: 500, maxZoom: 1.2 }); }} />}
     </main>
   );

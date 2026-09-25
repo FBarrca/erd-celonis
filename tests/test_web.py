@@ -4,13 +4,15 @@ import re
 from dataclasses import dataclass
 from threading import Thread
 from urllib.error import HTTPError
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
+from unittest.mock import Mock
 
 import pytest
 
 from erd_celonis.cli import erd
 from erd_celonis.erd import ERDGraph, Relationship, TableNode
 from erd_celonis.web import graph_to_dict, make_server
+from erd_celonis.query import QueryError
 
 
 @dataclass
@@ -118,3 +120,61 @@ def test_cli_defaults_to_local_interactive_server():
     assert parameters["port"].default == 8000
     assert parameters["open_browser"].default is True
     assert "output" not in parameters
+
+
+def test_query_api_requires_session_and_returns_results_and_errors(sample_graph):
+    runner = Mock(return_value={"columns": [{"name": "ID", "dtype": "int64"}], "rows": [[1]], "model_id": "model"})
+    server = make_server(sample_graph, port=0, query_runner=runner)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with urlopen(f"{base}/api/query-config") as response:
+            config = json.load(response)
+            assert response.headers["Cache-Control"] == "no-store"
+        assert config["enabled"] is True
+        headers = {"Content-Type": "application/json", "X-Query-Token": config["token"], "Origin": base}
+        payload = b'{"model_id":"model","columns":[{"name":"ID","query":"1"}]}'
+        with urlopen(Request(f"{base}/api/query", data=payload, headers=headers)) as response:
+            assert json.load(response)["rows"] == [[1]]
+        runner.assert_called_once_with(json.loads(payload))
+        for override, expected in [({"X-Query-Token": "bad"}, 403), ({"Origin": "https://other.example"}, 403),
+                                   ({"Host": "attacker.example"}, 403), ({"Content-Type": "text/plain"}, 415)]:
+            with pytest.raises(HTTPError) as failure:
+                urlopen(Request(f"{base}/api/query", data=payload, headers={**headers, **override}))
+            assert failure.value.code == expected
+        assert runner.call_count == 1
+        with pytest.raises(HTTPError) as failure:
+            urlopen(Request(f"{base}/api/query-config", headers={"Host": "attacker.example"}))
+        assert failure.value.code == 403
+        for body, expected in [(b"{broken", 400), (b"x" * 131073, 413)]:
+            with pytest.raises(HTTPError) as failure:
+                urlopen(Request(f"{base}/api/query", data=body, headers=headers))
+            assert failure.value.code == expected
+        runner.side_effect = QueryError("Invalid column", 422)
+        with pytest.raises(HTTPError) as failure:
+            urlopen(Request(f"{base}/api/query", data=payload, headers=headers))
+        assert failure.value.code == 422
+        assert json.load(failure.value)["error"] == "Invalid column"
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_graph_only_server_reports_queries_unavailable(sample_graph):
+    server = make_server(sample_graph, port=0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with urlopen(f"{base}/api/query-config") as response:
+            config = json.load(response)
+        assert config["enabled"] is False
+        with pytest.raises(HTTPError) as failure:
+            urlopen(Request(f"{base}/api/query", data=b'{}', headers={"Content-Type": "application/json", "X-Query-Token": config["token"]}))
+        assert failure.value.code == 503
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
