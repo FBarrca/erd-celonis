@@ -19,24 +19,28 @@ function ResultIcon({ kind }) {
   </svg>;
 }
 
-export default function Search({ tables, onSelect, placeholder = 'Find table or column', shortcut = true, autoFocus = false, onCancel, variant = '', actionLabel = 'Open' }) {
+export default function Search({ tables, onSelect, placeholder = 'Find table or column', shortcut = true, autoFocus = false, onCancel, variant = '', actionLabel = 'Open', tableOnlyToggle = false }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
   const [limit, setLimit] = useState(50);
+  const [tablesOnly, setTablesOnly] = useState(false);
   const inputRef = useRef(null);
   const rootRef = useRef(null);
   const activeRef = useRef(null);
   const listId = useId();
   const index = useMemo(() => createSearchIndex(tables), [tables]);
-  const results = useMemo(() => searchIndex(index, query), [index, query]);
+  const results = useMemo(() => {
+    const matches = searchIndex(index, query);
+    return tablesOnly ? matches.filter((result) => result.kind === 'table') : matches;
+  }, [index, query, tablesOnly]);
   const hasColumns = tables.some((table) => table.columns?.length);
   const expanded = open && Boolean(normalizeLabel(query).text);
   const visible = results.slice(0, limit);
 
   useEffect(() => { if (autoFocus) inputRef.current?.focus(); }, [autoFocus]);
 
-  useEffect(() => { setActive(0); setLimit(50); }, [query, tables]);
+  useEffect(() => { setActive(0); setLimit(50); }, [query, tables, tablesOnly]);
   useEffect(() => {
     if (expanded) activeRef.current?.scrollIntoView({ block: 'nearest' });
   }, [active, expanded]);
@@ -46,6 +50,14 @@ export default function Search({ tables, onSelect, placeholder = 'Find table or 
       if (!rootRef.current?.contains(event.target)) setOpen(false);
     };
     const handleShortcut = (event) => {
+      if (tableOnlyToggle && event.key.toLowerCase() === 'g' && (event.ctrlKey || event.metaKey) && !event.shiftKey && !event.altKey && !event.isComposing) {
+        const target = event.target;
+        event.preventDefault();
+        setTablesOnly((current) => target === inputRef.current ? !current : true);
+        inputRef.current?.focus();
+        setOpen(true);
+        return;
+      }
       if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return;
       const target = event.target;
       if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select'))) return;
@@ -59,7 +71,13 @@ export default function Search({ tables, onSelect, placeholder = 'Find table or 
       document.removeEventListener('pointerdown', outside);
       window.removeEventListener('keydown', handleShortcut);
     };
-  }, [shortcut]);
+  }, [shortcut, tableOnlyToggle]);
+
+  const toggleTablesOnly = () => {
+    setTablesOnly((current) => !current);
+    inputRef.current?.focus();
+    setOpen(true);
+  };
 
   const choose = (result) => {
     setQuery(''); setOpen(false); setActive(0);
@@ -89,9 +107,10 @@ export default function Search({ tables, onSelect, placeholder = 'Find table or 
       role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? listId : undefined}
       aria-activedescendant={expanded && visible[active] ? `${listId}-${active}` : undefined} autoComplete="off" spellCheck={false}/>
     {query ? <button className="search-clear" type="button" aria-label="Clear search" onClick={() => { setQuery(''); inputRef.current?.focus(); }}>×</button> : shortcut && <kbd aria-hidden="true">/</kbd>}
-    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{expanded ? `${results.length} ${results.length === 1 ? 'result' : 'results'} in this scope.${hasColumns ? '' : ' Column metadata is unavailable; only tables can be searched.'}` : ''}</span>
+    {tableOnlyToggle && <button className={`search-mode-toggle ${tablesOnly ? 'is-active' : ''}`} type="button" aria-pressed={tablesOnly} aria-label="Toggle table-only search" title="Toggle table-only search (Ctrl+G / ⌘G)" onClick={toggleTablesOnly}>T</button>}
+    <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{expanded ? `${results.length} ${results.length === 1 ? 'result' : 'results'} in this scope${tablesOnly ? ' (tables only)' : ''}.${hasColumns ? '' : ' Column metadata is unavailable; only tables can be searched.'}` : ''}</span>
     {expanded && <div className="search-results">
-      <div className="search-summary">{results.length ? `${results.length} results · showing ${visible.length}` : 'No matches in this scope'}</div>
+      <div className="search-summary">{results.length ? `${results.length} results · showing ${visible.length}${tablesOnly ? ' · tables only' : ''}` : 'No matches in this scope'}</div>
       {!hasColumns && <p className="search-note">Column metadata is unavailable; only tables can be searched.</p>}
       <div className="search-options" id={listId} role="listbox" aria-label="Tables and columns">
         {visible.map((result, position) => <div key={result.id} id={`${listId}-${position}`} role="option" aria-selected={active === position}
@@ -109,7 +128,7 @@ export default function Search({ tables, onSelect, placeholder = 'Find table or 
       {results.length > limit && <button type="button" className="search-more" onClick={() => {
         setLimit((current) => current + 50); setActive(limit); inputRef.current?.focus();
       }}>Show more ({results.length - limit} remaining)</button>}
-      <div className="search-help">↑ ↓ Navigate · Enter {actionLabel} · Esc {onCancel ? 'Cancel' : 'Dismiss'}</div>
+      <div className="search-help">↑ ↓ Navigate · Enter {actionLabel} · Esc {onCancel ? 'Cancel' : 'Dismiss'}{tableOnlyToggle ? ' · Ctrl+G / ⌘G Tables only' : ''}</div>
     </div>}
   </div>;
 }

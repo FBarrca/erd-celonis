@@ -494,7 +494,7 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
           <Icon name="chevron" size={16}/>
         </label>
         <div className="topbar__stats"><span><strong>{built.tables.length}</strong> tables</span><span><strong>{built.relationships.length}</strong> relations</span></div>
-        <Search tables={built.tables} onSelect={focusResult} shortcut={!choosingDestination} onCancel={choosingDestination ? closePath : undefined}/>
+        <Search tables={built.tables} onSelect={focusResult} shortcut={!choosingDestination} tableOnlyToggle={!choosingDestination} onCancel={choosingDestination ? closePath : undefined}/>
       </header>
       <section className="canvas" aria-label="Entity relationship diagram">
         <ReactFlow
