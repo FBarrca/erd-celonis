@@ -24,6 +24,45 @@ wheels = [
 ]
 
 [[package]]
+name = "celofast"
+version = "0.6.1"
+source = { directory = "../celofast" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pycelonis" },
+    { name = "pycelonis-core" },
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "pyyaml" },
+    { name = "rich" },
+    { name = "saolapy" },
+    { name = "typing-extensions" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "numpy", specifier = ">=1.23.5,<3.0" },
+    { name = "pandas", specifier = ">=1.5.2,<3.0" },
+    { name = "pycelonis", url = "https://pypi.celonis.cloud/pycelonis/pycelonis-2.15.1-py3-none-any.whl" },
+    { name = "pycelonis-core", url = "https://pypi.celonis.cloud/pycelonis-core/pycelonis_core-2.10.4-py3-none-any.whl" },
+    { name = "pydantic", specifier = ">=2.0,<3.0" },
+    { name = "python-dotenv", specifier = ">=1.0,<2.0" },
+    { name = "pyyaml", specifier = ">=6.0,<7.0" },
+    { name = "rich", specifier = ">=13.0,<16.0" },
+    { name = "saolapy", url = "https://pypi.celonis.cloud/saolapy/saolapy-0.3.3-py3-none-any.whl" },
+    { name = "tomli", marker = "python_full_version < '3.11'", specifier = ">=2.0" },
+    { name = "typing-extensions", specifier = ">=4.6,<5.0" },
+]
+
+[package.metadata.requires-dev]
+dev = [
+    { name = "mypy", specifier = ">=1.15,<3" },
+    { name = "pytest", specifier = ">=8.0,<9.0" },
+    { name = "pytest-asyncio", specifier = ">=0.23,<1.0" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://pypi.org/simple/" }
@@ -43,9 +82,10 @@ wheels = [
 
 [[package]]
 name = "erd-celonis"
-version = "0.4.0"
+version = "0.4.2"
 source = { editable = "." }
 dependencies = [
+    { name = "celofast" },
     { name = "fire" },
     { name = "graphviz" },
     { name = "pycelonis" },
@@ -63,6 +103,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "celofast", directory = "../celofast" },
     { name = "fire", specifier = ">=0.7.1" },
     { name = "graphviz", specifier = ">=0.20,<1.0" },
     { name = "pycelonis", specifier = ">=2.12,<3.0", index = "https://pypi.celonis.cloud/" },
@@ -327,7 +368,7 @@ wheels = [
 [[package]]
 name = "pycelonis"
 version = "2.15.1"
-source = { registry = "https://pypi.celonis.cloud/" }
+source = { url = "https://pypi.celonis.cloud/pycelonis/pycelonis-2.15.1-py3-none-any.whl" }
 dependencies = [
     { name = "packaging" },
     { name = "pandas" },
@@ -337,22 +378,41 @@ dependencies = [
     { name = "saolapy" },
     { name = "tqdm" },
 ]
-sdist = { url = "https://pypi.celonis.cloud/pycelonis/pycelonis-2.15.1.tar.gz", hash = "sha256:8b1009417730b4e81d096e4d9468820c657918126abc6b79c0ace322263a6a04" }
 wheels = [
     { url = "https://pypi.celonis.cloud/pycelonis/pycelonis-2.15.1-py3-none-any.whl", hash = "sha256:d52b7316683cee62668b02703ab3b53b9b915702dcc60efe79ca4afb2d623b6f" },
 ]
 
+[package.metadata]
+requires-dist = [
+    { name = "ddtrace", marker = "extra == 'mlwb'", specifier = ">=1.5.5,<2.5.1" },
+    { name = "packaging" },
+    { name = "pandas", specifier = ">=1.4.0" },
+    { name = "psutil", marker = "extra == 'mlwb'" },
+    { name = "pyarrow", specifier = ">=8.0.0" },
+    { name = "pycelonis-core", specifier = ">=2.10.4" },
+    { name = "python-json-logger", marker = "extra == 'mlwb'" },
+    { name = "pyyaml" },
+    { name = "saolapy", specifier = ">=0.3.3.dev0" },
+    { name = "tqdm", specifier = ">=4.64.0" },
+]
+provides-extras = ["mlwb"]
+
 [[package]]
 name = "pycelonis-core"
 version = "2.10.4"
-source = { registry = "https://pypi.celonis.cloud/" }
+source = { url = "https://pypi.celonis.cloud/pycelonis-core/pycelonis_core-2.10.4-py3-none-any.whl" }
 dependencies = [
     { name = "httpx" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://pypi.celonis.cloud/pycelonis-core/pycelonis_core-2.10.4.tar.gz", hash = "sha256:ba6afa3b189d857f59a599d2e0bdfc875e28e703e4914ef920fdd1a4164d9267" }
 wheels = [
     { url = "https://pypi.celonis.cloud/pycelonis-core/pycelonis_core-2.10.4-py3-none-any.whl", hash = "sha256:eb54e081c044a662e90ad6dc287cf1676f635995ab2c9d101252204fa474f667" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.28.0" },
+    { name = "pydantic" },
 ]
 
 [[package]]
@@ -545,14 +605,30 @@ wheels = [
 [[package]]
 name = "saolapy"
 version = "0.3.3"
-source = { registry = "https://pypi.celonis.cloud/" }
+source = { url = "https://pypi.celonis.cloud/saolapy/saolapy-0.3.3-py3-none-any.whl" }
 dependencies = [
     { name = "pydantic" },
 ]
-sdist = { url = "https://pypi.celonis.cloud/saolapy/saolapy-0.3.3.tar.gz", hash = "sha256:e5415e2df8cef1c730a5073f90b82ab32b4feb28ef5e3d9ca3153038e45c0ca4" }
 wheels = [
     { url = "https://pypi.celonis.cloud/saolapy/saolapy-0.3.3-py3-none-any.whl", hash = "sha256:12ff085493778415d941ac74e1b79c469e20bc9fb10761b2f5a45582b5f551be" },
 ]
+
+[package.metadata]
+requires-dist = [
+    { name = "black", marker = "extra == 'dev'" },
+    { name = "coverage", marker = "extra == 'dev'" },
+    { name = "mypy", marker = "extra == 'dev'" },
+    { name = "pre-commit", marker = "extra == 'dev'" },
+    { name = "pycelonis", marker = "extra == 'dev'", specifier = ">=2.8.0" },
+    { name = "pycelonis-testing", marker = "extra == 'dev'" },
+    { name = "pydantic" },
+    { name = "pydantic", marker = "extra == 'dev'" },
+    { name = "pylint", marker = "extra == 'dev'" },
+    { name = "pytest", marker = "extra == 'dev'" },
+    { name = "pytest-vcr", marker = "extra == 'dev'" },
+    { name = "pytest-xdist", extras = ["psutil"], marker = "extra == 'dev'" },
+]
+provides-extras = ["dev"]
 
 [[package]]
 name = "six"

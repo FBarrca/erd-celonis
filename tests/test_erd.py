@@ -243,7 +243,7 @@ def stub_cli_pool(monkeypatch, models):
         get_data_model=Mock(side_effect=lambda model_id: next(model for model in models if model.id == model_id)),
     )
     get_pool = Mock(return_value=pool)
-    monkeypatch.setitem(sys.modules, "pycelonis", SimpleNamespace(
+    monkeypatch.setitem(sys.modules, "celofast", SimpleNamespace(
         get_celonis=lambda **kwargs: SimpleNamespace(data_integration=SimpleNamespace(get_data_pool=get_pool)),
     ))
     monkeypatch.setitem(sys.modules, "dotenv", SimpleNamespace(

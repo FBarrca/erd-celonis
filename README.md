@@ -29,6 +29,9 @@ Install the command as a standalone uv tool:
 uv tool install git+https://github.com/FBarrca/erd-celonis
 ```
 
+This checkout expects the sibling `celofast` package at `../celofast` (or an
+equivalent local source configured in `pyproject.toml`).
+
 This still creates the `erd-celonis` command in uv's isolated tool
 environment. The compiled React app is included in the Python wheel, so Node.js
 is **not** required to install or run the tool. If the command is not found,
@@ -42,11 +45,12 @@ cp .env.example .env
 ```
 
 The template contains `CELONIS_URL`, `OAUTH_CLIENT_ID`,
-`OAUTH_CLIENT_SECRET`, `OAUTH_SCOPES`, and `CELONIS_KEY_TYPE`. The CLI searches
+`OAUTH_CLIENT_SECRET`, and `OAUTH_SCOPES`. The CLI uses CeloFast's
+OAuth client factory and searches
 for `.env` from the current directory, including its parent directories.
-`USER_KEY` is the default; set `CELONIS_KEY_TYPE=APP_KEY` when using an
-application key. A `CELONIS_API_TOKEN` can be used instead when supported by
-your tenant and Pycelonis.
+CeloFast expects OAuth client credentials. A `CELONIS_API_TOKEN` is no longer
+used by this CLI because authentication is intentionally centralized in
+CeloFast.
 
 ## Run the explorer
 

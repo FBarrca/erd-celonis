@@ -23,7 +23,7 @@ from .web import serve_graph
 
 
 def _configured_key_type(key_type: str | None) -> str:
-    """Resolve the explicit Pycelonis token type used by the CLI."""
+    """Keep the legacy resolver available for callers of older releases."""
 
     return key_type or os.getenv("CELONIS_KEY_TYPE") or "USER_KEY"
 
@@ -143,10 +143,8 @@ def erd(
         data_model_id: Optional data model ID. If omitted, all data models
             in the pool are loaded.
         include_columns: Fetch and render table columns when true.
-        key_type: Celonis token type, such as ``USER_KEY`` or ``APP_KEY``.
-            If omitted, ``CELONIS_KEY_TYPE`` is read from the environment and
-            defaults to ``USER_KEY``.  Setting this explicitly avoids
-            Pycelonis probing both token types during authentication.
+        key_type: Deprecated compatibility argument. Authentication is
+            handled by CeloFast's OAuth client factory.
         host: Address on which to serve the explorer. Defaults to local-only.
         port: HTTP port. Use 0 to select an available port automatically.
         open_browser: Open the explorer in the default browser when ready.
@@ -165,7 +163,7 @@ def erd(
 
         # Import lazily so importing the CLI does not create a network connection.
         from dotenv import find_dotenv, load_dotenv
-        from pycelonis import get_celonis
+        from celofast import get_celonis
 
         dotenv_path = find_dotenv(usecwd=True)
         if dotenv_path:
@@ -173,10 +171,8 @@ def erd(
         else:
             report("No .env file found; using existing shell environment variables.")
         load_dotenv(dotenv_path)
-        configured_key_type = _configured_key_type(key_type)
-
         report("Connecting to Celonis...")
-        celonis = get_celonis(key_type=configured_key_type, check_if_outdated=False)
+        celonis = get_celonis()
         report(f"Loading data pool {pool_id}...")
         data_pool = celonis.data_integration.get_data_pool(pool_id)
         graph = build_data_pool_graph(

@@ -10,6 +10,7 @@ dependencies = [
     "saolapy>=0.3.3,<1.0",
     "pycelonis-core>=2.10.2,<3.0",
     "python-dotenv>=1.0,<2.0",
+    "celofast>=0.6.1",
     "graphviz>=0.20,<1.0",
     "fire>=0.7.1",
     "rich>=15.0.0",
@@ -55,6 +56,7 @@ url = "https://pypi.celonis.cloud/"
 explicit = true
 
 [tool.uv.sources]
+celofast = { path = "../celofast" }
 pycelonis = { index = "celonis" }
 pycelonis-core = { index = "celonis" }
 saolapy = { index = "celonis" }

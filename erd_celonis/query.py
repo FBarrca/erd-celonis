@@ -109,9 +109,25 @@ class QueryRunner:
             # from_pql does not retain PQL.limit/distinct: apply them at export.
             # A constant index preserves DISTINCT and aggregate semantics; the
             # default RangeIndex adds a RUNNING_TOTAL expression to the query.
-            frame = pql.DataFrame.from_pql(query, data_model=model, index=Index("0", name=index_name)).to_pandas(
-                limit=request["limit"], distinct=request["distinct"],
-            ).iloc[:request["limit"]]
+            try:
+                frame = pql.DataFrame.from_pql(query, data_model=model, index=Index("0", name=index_name)).to_pandas(
+                    limit=request["limit"], distinct=request["distinct"],
+                ).iloc[:request["limit"]]
+            except ValueError as exc:
+                # PQLDebugger does not understand aliases on some custom
+                # perspectives, although the Process Mining Engine does. In
+                # that case, let the server validate the complete query.
+                if "Table not found:" not in str(exc) and "Column not found:" not in str(exc):
+                    raise
+                raw_query = pql.PQL()
+                raw_query += pql.PQLColumn(name=index_name, query="0")
+                for column in request["columns"]:
+                    raw_query += pql.PQLColumn(**column)
+                for filter_ in request["filters"]:
+                    raw_query += pql.PQLFilter(query=filter_)
+                raw_query.limit = request["limit"]
+                raw_query.distinct = request["distinct"]
+                frame = model._export_data_frame(raw_query).drop(columns=[index_name], errors="ignore").iloc[:request["limit"]]
             return {
                 "model_id": request["model_id"],
                 "columns": [{"name": str(name), "dtype": str(dtype)} for name, dtype in zip(frame.columns, frame.dtypes)],
@@ -124,6 +140,12 @@ class QueryRunner:
         except QueryError:
             raise
         except Exception as exc:
-            raise QueryError(f"PQL execution failed: {str(exc)[:4000]}", 422) from exc
+            message = str(exc)
+            if "Could not connect to Process Mining Engine" in message:
+                message = (
+                    "The selected data model is not queryable because its Process Mining Engine "
+                    "is not loaded. Load or activate the model in Celonis, then run the query again."
+                )
+            raise QueryError(f"PQL execution failed: {message[:4000]}", 422) from exc
         finally:
             self._lock.release()
