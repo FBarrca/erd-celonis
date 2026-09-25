@@ -28,7 +28,7 @@ export default function QueryPanel({ poolId, modelId, modelName, tables, drafts,
   const [page, setPage] = useState(0);
   const [sort, setSort] = useState(null);
   const [expanded, setExpanded] = useState(false);
-  const [resultsHeight, setResultsHeight] = useState(250);
+  const [resultsHeight, setResultsHeight] = useState(160);
   const requestRef = useRef(null);
   const editorRef = useRef(null);
   const resizeRef = useRef(null);
@@ -105,7 +105,7 @@ export default function QueryPanel({ poolId, modelId, modelName, tables, drafts,
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   };
   const stale = result && JSON.stringify(result.draft) !== JSON.stringify(draft);
-  const resizeResults = nextHeight => setResultsHeight(Math.max(46, Math.min(650, nextHeight)));
+  const resizeResults = nextHeight => setResultsHeight(Math.max(64, Math.min(650, nextHeight)));
   return <section className={`query-panel ${open ? 'is-open' : ''} ${expanded && open ? 'is-expanded' : ''}`} aria-label="PQL query panel"
     onKeyDown={event => { if (!event.defaultPrevented && (event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); void run(); } }}>
     {open && !expanded && <div className="query-resize" role="separator" aria-label="Resize PQL panel" aria-orientation="horizontal" tabIndex={0}
@@ -115,42 +115,52 @@ export default function QueryPanel({ poolId, modelId, modelName, tables, drafts,
       onPointerMove={event => { if (resizeRef.current) onResize(resizeRef.current.height + resizeRef.current.y - event.clientY); }}
       onPointerUp={() => { resizeRef.current = null; }} onPointerCancel={() => { resizeRef.current = null; }}/>}
     <header className="query-header">
-      <strong className="query-title">PQL console</strong>
-      <span className="query-model" title={modelName}>{modelName}</span>
-      <span className="query-header-status" role="status">{running ? 'Running query…' : result ? `${result.row_count.toLocaleString()} rows · ${(result.elapsed_ms / 1000).toFixed(2)} s` : 'Ready'}</span>
+      <strong className="query-title" title={`PQL console · ${modelName}`}>PQL console</strong>
+      {open ? <>
+        <button type="button" className="query-run" disabled={running} title="Run query (Ctrl / ⌘ + Enter)" onClick={() => void run()}>{running ? 'Running…' : '▶ Run'} <kbd>Ctrl / ⌘ ↵</kbd></button>
+        <label className="query-limit">Limit <input type="number" min={1} max={10000} aria-label="Query row limit" disabled={Boolean(parsed.query?.limitFromScript)} title={parsed.query?.limitFromScript ? 'Set by LIMIT in the query' : 'Maximum returned rows'} value={parsed.query?.limitFromScript ? parsed.query.limit : draft.limit || ''} onChange={e => edit({ ...draft, limit: Number(e.target.value) })}/></label>
+        <div className="query-tools">
+          <button type="button" onClick={() => insertText('FILTER condition;\n\n', true)}>+ Filter</button>
+          <button type="button" onClick={() => {
+            const editor = editorRef.current;
+            editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: exampleScript(tables[0]) }, userEvent: 'input' }); editor.focus();
+          }}>Load example</button>
+          <Search tables={tables} onSelect={item => insertText(pqlReference(item))} placeholder="Insert table or column" shortcut={false} variant="pql" actionLabel="Insert"/>
+        </div>
+      </> : <span className="query-header-status" role="status">{running ? 'Running query…' : error ? 'Query error' : result ? `${result.row_count.toLocaleString()} rows · ${(result.elapsed_ms / 1000).toFixed(2)} s` : 'Ready'}</span>}
       <div className="query-window-controls">
         {open && <button className="query-icon-button" type="button" aria-label={expanded ? 'Restore console size' : 'Expand console'} title={expanded ? 'Restore console size' : 'Expand console'} onClick={() => setExpanded(!expanded)}><PanelIcon kind={expanded ? 'restore' : 'expand'}/></button>}
         <button className="query-icon-button" type="button" aria-label={open ? 'Collapse PQL console' : 'Open PQL console'} title={open ? 'Collapse PQL console' : 'Open PQL console'} aria-expanded={open} aria-controls="query-body" onClick={onToggle}><PanelIcon kind={open ? 'close' : 'open'}/></button>
       </div>
     </header>
     <div className="query-body" id="query-body" hidden={!open}>
-      <div className="query-toolbar">
-        <button type="button" className="query-run" disabled={running} onClick={() => void run()}>{running ? 'Running…' : '▶ Run'} <kbd>Ctrl / ⌘ ↵</kbd></button>
-        <label>Row limit <input type="number" min={1} max={10000} aria-label="Query row limit" disabled={Boolean(parsed.query?.limitFromScript)} title={parsed.query?.limitFromScript ? 'Set by LIMIT in the query' : 'Maximum returned rows'} value={parsed.query?.limitFromScript ? parsed.query.limit : draft.limit || ''} onChange={e => edit({ ...draft, limit: Number(e.target.value) })}/></label>
-        <button type="button" onClick={() => insertText('FILTER condition;\n\n', true)}>+ Filter</button>
-        <Search tables={tables} onSelect={item => insertText(pqlReference(item))} placeholder="Insert table or column" shortcut={false} variant="pql" actionLabel="Insert"/>
-      </div>
       <div className="query-editor">
-        <div className="query-editor-heading"><span>QUERY <small>PQL</small></span><span>{parsed.query ? `${parsed.query.columns.length} columns · ${parsed.query.filters.length} filters` : 'TABLE expressions + FILTER statements'} <button type="button" onClick={() => {
-          const editor = editorRef.current;
-          editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: exampleScript(tables[0]) }, userEvent: 'input' }); editor.focus();
-        }}>Load example</button></span></div>
         <PqlEditor consoleMode isFilter maxLength={MAX_SCRIPT_LENGTH} label="PQL query" placeholder="Write a TABLE query…" value={draft.script}
           register={editor => { editorRef.current = editor; }} completionIndex={completionIndex} onChange={script => edit({ ...draft, script })} onRun={() => void run()}/>
       </div>
       <div className="query-messages">
         {notice && <p className="query-note" role="status">{notice}</p>}
       </div>
-      <div className="query-results-resize" role="separator" aria-label="Resize PQL results" aria-orientation="horizontal"
-        aria-valuemin={46} aria-valuemax={650} aria-valuenow={resultsHeight} tabIndex={0}
+      {rows.length > 0 && <div className="query-results-resize" role="separator" aria-label="Resize PQL results" aria-orientation="horizontal"
+        aria-valuemin={64} aria-valuemax={650} aria-valuenow={resultsHeight} tabIndex={0}
         onKeyDown={event => { if (['ArrowUp', 'ArrowDown'].includes(event.key)) { event.preventDefault(); resizeResults(resultsHeight + (event.key === 'ArrowUp' ? 30 : -30)); } }}
         onPointerDown={event => { resultsResizeRef.current = { y: event.clientY, height: resultsHeight }; event.currentTarget.setPointerCapture(event.pointerId); }}
         onPointerMove={event => { if (resultsResizeRef.current) resizeResults(resultsResizeRef.current.height + resultsResizeRef.current.y - event.clientY); }}
-        onPointerUp={() => { resultsResizeRef.current = null; }} onPointerCancel={() => { resultsResizeRef.current = null; }} />
-      <div className="query-results" style={{ '--query-results-height': `${resultsHeight}px` }} aria-busy={running}>
-        <div className="query-results-toolbar"><strong>RESULTS</strong><span>{result ? `${result.row_count.toLocaleString()} rows · ${(result.elapsed_ms / 1000).toFixed(2)} s` : 'DataFrame'}</span>{result && <button type="button" onClick={exportCsv}>Download CSV</button>}</div>
+        onPointerUp={() => { resultsResizeRef.current = null; }} onPointerCancel={() => { resultsResizeRef.current = null; }} />}
+      <div className={`query-results ${rows.length ? 'has-result' : 'is-idle'}`} style={{ '--query-results-height': `${resultsHeight}px` }} aria-busy={running}>
+        {result && <div className="query-results-toolbar">
+          <strong>Results</strong><span role="status">{result.row_count.toLocaleString()} rows · {(result.elapsed_ms / 1000).toFixed(2)} s</span>
+          <div className="query-results-actions">
+            {pages > 1 && <nav className="query-pagination" aria-label="Result pages">
+              <button type="button" aria-label="Previous result page" title="Previous page" disabled={page === 0} onClick={() => setPage(page - 1)}>‹</button>
+              <span>Page {page + 1} / {pages}</span>
+              <button type="button" aria-label="Next result page" title="Next page" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>›</button>
+            </nav>}
+            <button type="button" onClick={exportCsv}>Download CSV</button>
+          </div>
+        </div>}
         {error && <pre className="query-error" role="alert">{error}</pre>}
-        {!result && !error && <div className="query-empty"><strong>{running ? 'Executing in Celonis…' : 'Run a query to see results'}</strong><p>{running ? 'You can keep exploring the diagram. Switching models stops waiting; the server query may still finish.' : 'Ctrl / ⌘ + Enter · Results stay in this session'}</p></div>}
+        {!result && !error && <div className="query-empty" role="status">{running ? 'Executing in Celonis… You can keep editing.' : 'Run a query to see results.'}</div>}
         {result && <>
           {(stale || result.limit_reached) && <p className="query-note">{stale && 'Showing the previous run. Run again to apply your edits. '}{result.limit_reached && `Reached the ${result.limit.toLocaleString()}-row limit; more rows may exist.`}</p>}
           <div className="query-grid" tabIndex={0} aria-label="Query result rows">
@@ -158,7 +168,6 @@ export default function QueryPanel({ poolId, modelId, modelName, tables, drafts,
               <tbody>{rows.slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE).map((row, index) => <tr key={index}>{row.map((value, cell) => <td key={cell}>{value === null ? <span className="query-null">NULL</span> : String(value)}</td>)}</tr>)}</tbody></table>
             {!rows.length && <p className="query-note">The query returned no rows.</p>}
           </div>
-          <div className="query-pagination"><button type="button" disabled={page === 0} onClick={() => setPage(page - 1)}>Previous</button><span>Page {page + 1} of {pages} · {PAGE_SIZE} rows per page</span><button type="button" disabled={page + 1 >= pages} onClick={() => setPage(page + 1)}>Next</button></div>
         </>}
       </div>
     </div>

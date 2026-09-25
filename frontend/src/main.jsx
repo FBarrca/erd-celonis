@@ -314,7 +314,7 @@ function Diagram({ graph }) {
   const [views] = useState(() => createViewStore());
   const [drafts] = useState(() => createDraftStore());
   const [queryOpen, setQueryOpen] = useState(true);
-  const [queryHeight, setQueryHeight] = useState(440);
+  const [queryHeight, setQueryHeight] = useState(320);
   const restoreScopeFocus = useRef(false);
   const models = useMemo(() => [...new Map(graph.tables.map((table) => [modelId(graph, table), table.data_model_name || graph.metadata.data_model_name || modelId(graph, table)])).entries()], [graph]);
   const [activeModel, setActiveModel] = useState(() => views.loadScope(graph));
