@@ -159,7 +159,9 @@ def build_data_pool_graph(
     else:
         if progress is not None:
             progress("Fetching data-model metadata...")
-        data_models = data_pool.get_data_models()
+        data_models = list(data_pool.get_data_models())
+        if not data_models:
+            raise ValueError("The Celonis data pool contains no data models.")
     if progress is not None:
         progress(f"Processing {len(data_models)} data model(s)...")
 

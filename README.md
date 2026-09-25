@@ -49,14 +49,15 @@ your tenant and Pycelonis.
 
 ## Run the explorer
 
-Serve the first data model in a data pool:
+Load all data models (perspectives) in a data pool:
 
 ```bash
 erd-celonis "<data-pool-id>"
 ```
 
 The command opens the explorer at `http://127.0.0.1:8000` and keeps running
-until you press `Ctrl+C`.
+until you press `Ctrl+C`. Use the **Scope** buttons to view **All models** or
+select an individual model. A previously saved scope is restored when available.
 
 Select a particular data model with the second positional argument:
 
