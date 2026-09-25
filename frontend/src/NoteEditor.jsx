@@ -16,7 +16,7 @@ export default function NoteEditor({ value, onChange, autoFocus }) {
       state: EditorState.create({ doc: value, extensions: [
         noteMarkdown, history(), drawSelection(), EditorView.lineWrapping,
         keymap.of([...defaultKeymap, ...historyKeymap]),
-        placeholder('Write a note… Markdown supported'),
+        placeholder('Write a note…'),
         EditorView.contentAttributes.of({ 'aria-label': 'Note text', 'aria-multiline': 'true', spellcheck: 'true' }),
         EditorView.updateListener.of(update => {
           if (update.docChanged && !update.transactions.every(transaction => transaction.annotation(externalChange))) {
