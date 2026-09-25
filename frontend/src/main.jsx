@@ -49,6 +49,14 @@ function displayName(table) {
   return table.alias || table.name || String(table.table_id || table.id);
 }
 
+function tableHeaderKind(table) {
+  const names = [table.alias, table.name].filter(Boolean).map((name) => String(name).trim().toLocaleLowerCase());
+  if (names.some((name) => name.startsWith('o_'))) return 'object';
+  if (names.some((name) => name.startsWith('e_'))) return 'event';
+  if (names.some((name) => name.startsWith('c_'))) return 'case';
+  return 'other';
+}
+
 function markerFor(column, table, foreignColumns) {
   const name = column.name.toLocaleLowerCase();
   const isPrimary = table.primary_keys.some((key) => String(key).toLocaleLowerCase() === name);
@@ -79,7 +87,7 @@ function TableCard({ data }) {
   const visible = data.visibleColumns;
   const hiddenCount = table.columns.length - visible.length;
   return (
-    <article className={`table-card ${data.isSelected ? 'is-selected' : ''} ${data.isDimmed ? 'is-dimmed' : ''}`}>
+    <article className={`table-card table-card--${tableHeaderKind(table)} ${data.isSelected ? 'is-selected' : ''} ${data.isDimmed ? 'is-dimmed' : ''}`}>
       <Handle type="source" position={Position.Top} className="table-handle table-handle--main" />
       <Handle type="target" position={Position.Bottom} className="table-handle table-handle--main" />
       <button className="table-card__header" type="button" onClick={() => data.onSelectTable(table.id)} aria-label={`${data.choosingDestination ? 'Connect to' : 'Inspect'} ${displayName(table)}`}>
