@@ -87,17 +87,20 @@ from memory.
 
 ### Find a path between tables
 
-Click **Find path** in the scope bar and choose a **From table** and **To table**.
-You can also open a table's inspector and choose **Find a path from this table**.
+Select a table and choose **Find connection to…** in its inspector. The starting
+table stays visible while you search for a destination or click another table
+on the diagram. Destination search uses the same fuzzy matching, highlights,
+and keyboard navigation as the main search; choosing a column connects to its table.
 The explorer highlights one shortest route, fits it on the canvas, and lists
 every table and join-column pair along the way. Relationships can be traversed
 in either direction; all columns of a composite relationship are shown together.
 The route describes schema connectivity, not a guarantee that a PQL join is valid.
 
-Use **Swap tables** to reverse the route, **Fit route** to recenter it, or
-**Clear** to choose new endpoints. Disconnected tables show a **No path found**
-explanation for the loaded scope. Changing model scope clears the endpoints;
-closing the panel or pressing Escape returns to normal inspection.
+Use **Change destination** to explore another connection, **Fit route** to
+recenter it, or **Clear route** to return to the starting table's inspector.
+Disconnected tables show a **No path found** explanation for the loaded scope.
+Escape cancels destination selection and returns to the starting table.
+Changing model scope clears the connection.
 
 ### Search tables and columns
 

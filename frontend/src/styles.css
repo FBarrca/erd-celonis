@@ -64,7 +64,6 @@ button { color: inherit; }
 .model-bar button:hover { color: var(--ink); background: #edf1ef; }
 .model-bar button.is-active { color: #254615; background: #e1f3d4; border-color: #bfdda9; font-weight: 650; }
 .model-bar__hint { margin-left: auto; color: #87928b; font-size: 11px; }
-.model-bar .model-bar__path { display: inline-flex; align-items: center; gap: 5px; flex: none; border-color: #bfdda9; }
 
 .canvas { min-height: 0; transition: margin-right .25s ease; }
 .has-inspector .canvas { margin-right: 380px; }
@@ -133,10 +132,12 @@ button { color: inherit; }
 .path-finder { display: flex; flex-direction: column; }
 .path-finder .inspector__header { flex: none; }
 .path-finder .inspector__body { height: auto; min-height: 0; flex: 1; }
-.path-selectors { display: grid; gap: 12px; }
-.path-selectors label { display: grid; gap: 6px; color: #536057; font-size: 12px; font-weight: 650; }
-.path-selectors select { width: 100%; min-width: 0; padding: 9px; color: var(--ink); background: white; border: 1px solid #b8c7be; border-radius: 6px; font-size: 12px; }
-.path-selectors select:focus-visible, .path-actions button:focus-visible, .path-start:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.path-actions button:focus-visible, .path-start:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.path-destination { display: grid; gap: 6px; margin-bottom: 16px; overflow-wrap: anywhere; }
+.path-destination span { color: var(--muted); font-size: 11px; }
+.path-destination strong { font-size: 16px; }
+.canvas-prompt { position: absolute; top: 15px; left: 15px; right: 15px; display: flex; flex-wrap: wrap; align-items: center; gap: 5px; width: fit-content; max-width: calc(100% - 30px); padding: 9px 12px; background: #eff7ea; border: 1px solid #bfdda9; border-radius: 7px; font-size: 12px; box-shadow: var(--shadow); overflow-wrap: anywhere; }
+.canvas-prompt button { padding: 3px 7px; margin-left: 8px; background: white; border: 1px solid #bfdda9; border-radius: 4px; cursor: pointer; font-size: 11px; }
 .path-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0 18px; }
 .path-actions button, .path-start { padding: 7px 10px; background: #edf5e9; border: 1px solid #bfdda9; border-radius: 6px; font-size: 11px; cursor: pointer; }
 .path-actions button:hover, .path-start:hover { background: #dff0d3; }
@@ -157,6 +158,7 @@ button { color: inherit; }
 .path-join small { margin: 5px 0; }
 
 @media (max-width: 800px) {
+  .canvas-prompt { display: none; }
   .topbar { gap: 12px; padding: 0 12px; }.topbar__stats { display: none; }.topbar__export { padding: 8px; }.topbar__export-label { display: none; }.brand h1 { max-width: 180px; }.search-wrap { width: auto; flex: 1; }.model-bar { padding: 0 12px; overflow-x: auto; }.model-bar__hint { display: none; }.inspector { top: auto; left: 0; width: 100%; height: min(58%, 520px); border-top: 1px solid #cdd4d0; border-left: 0; }.has-inspector .canvas { margin-right: 0; margin-bottom: min(58vh, 520px); }.react-flow__minimap { display: none; }.canvas-legend { right: 12px; left: auto; }.canvas-legend span:nth-child(-n+3) { display: none; }
 }
 
@@ -173,3 +175,11 @@ button { color: inherit; }
   .search-results { top: 40px; max-height: calc(100dvh - 120px); }
   .model-bar { white-space: nowrap; }
 }
+
+.path-finder .search-wrap--destination { width: 100%; flex: none; flex-wrap: wrap; gap: 0 8px; color: var(--muted); background: white; border-color: #b8c7be; }
+.search-wrap--destination input { flex: 1; width: 0; height: 40px; color: var(--ink); font-size: 12px; }
+.search-wrap--destination input::placeholder { color: var(--muted); }
+.search-wrap--destination .search-clear { color: var(--muted); }
+.search-wrap--destination kbd { color: var(--muted); background: #f0f4f1; border-color: var(--line); }
+.search-wrap--destination .search-results { position: static; flex: 1 0 100%; width: 100%; max-height: none; padding: 4px 0; border: 0; border-top: 1px solid var(--line); border-radius: 0; box-shadow: none; }
+.search-wrap--destination .search-options { max-height: 240px; }

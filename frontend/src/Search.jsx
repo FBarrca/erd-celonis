@@ -19,7 +19,7 @@ function ResultIcon({ kind }) {
   </svg>;
 }
 
-export default function Search({ tables, onSelect }) {
+export default function Search({ tables, onSelect, placeholder = 'Find table or column', shortcut = true, autoFocus = false, onCancel, variant = '', actionLabel = 'Open' }) {
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const [active, setActive] = useState(0);
@@ -34,6 +34,8 @@ export default function Search({ tables, onSelect }) {
   const expanded = open && Boolean(normalizeLabel(query).text);
   const visible = results.slice(0, limit);
 
+  useEffect(() => { if (autoFocus) inputRef.current?.focus(); }, [autoFocus]);
+
   useEffect(() => { setActive(0); setLimit(50); }, [query, tables]);
   useEffect(() => {
     if (expanded) activeRef.current?.scrollIntoView({ block: 'nearest' });
@@ -43,7 +45,7 @@ export default function Search({ tables, onSelect }) {
     const outside = (event) => {
       if (!rootRef.current?.contains(event.target)) setOpen(false);
     };
-    const shortcut = (event) => {
+    const handleShortcut = (event) => {
       if (event.key !== '/' || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey || event.isComposing) return;
       const target = event.target;
       if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select'))) return;
@@ -52,12 +54,12 @@ export default function Search({ tables, onSelect }) {
       setOpen(true);
     };
     document.addEventListener('pointerdown', outside);
-    window.addEventListener('keydown', shortcut);
+    if (shortcut) window.addEventListener('keydown', handleShortcut);
     return () => {
       document.removeEventListener('pointerdown', outside);
-      window.removeEventListener('keydown', shortcut);
+      window.removeEventListener('keydown', handleShortcut);
     };
-  }, []);
+  }, [shortcut]);
 
   const choose = (result) => {
     setQuery(''); setOpen(false); setActive(0);
@@ -66,7 +68,9 @@ export default function Search({ tables, onSelect }) {
   };
   const onKeyDown = (event) => {
     if (event.nativeEvent.isComposing) return;
-    if (event.key === 'Escape' && expanded) {
+    if (event.key === 'Escape' && onCancel) {
+      event.preventDefault(); event.stopPropagation(); onCancel();
+    } else if (event.key === 'Escape' && expanded) {
       event.preventDefault(); event.stopPropagation(); setOpen(false);
     } else if (event.target === inputRef.current && ['ArrowDown', 'ArrowUp'].includes(event.key)) {
       event.preventDefault(); setOpen(true);
@@ -77,14 +81,14 @@ export default function Search({ tables, onSelect }) {
     }
   };
 
-  return <div className="search-wrap" ref={rootRef} onKeyDown={onKeyDown}
+  return <div className={`search-wrap ${variant ? `search-wrap--${variant}` : ''}`} ref={rootRef} onKeyDown={onKeyDown}
     onBlur={(event) => { if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false); }}>
     <svg className="icon" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
     <input ref={inputRef} value={query} onChange={(event) => { setQuery(event.target.value); setOpen(true); setActive(0); setLimit(50); }}
-      onFocus={() => setOpen(true)} placeholder="Find table or column" aria-label="Find table or column"
+      onFocus={() => setOpen(true)} placeholder={placeholder} aria-label={placeholder}
       role="combobox" aria-autocomplete="list" aria-expanded={expanded} aria-controls={expanded ? listId : undefined}
       aria-activedescendant={expanded && visible[active] ? `${listId}-${active}` : undefined} autoComplete="off" spellCheck={false}/>
-    {query ? <button className="search-clear" type="button" aria-label="Clear search" onClick={() => { setQuery(''); inputRef.current?.focus(); }}>×</button> : <kbd aria-hidden="true">/</kbd>}
+    {query ? <button className="search-clear" type="button" aria-label="Clear search" onClick={() => { setQuery(''); inputRef.current?.focus(); }}>×</button> : shortcut && <kbd aria-hidden="true">/</kbd>}
     <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">{expanded ? `${results.length} ${results.length === 1 ? 'result' : 'results'} in this scope.${hasColumns ? '' : ' Column metadata is unavailable; only tables can be searched.'}` : ''}</span>
     {expanded && <div className="search-results">
       <div className="search-summary">{results.length ? `${results.length} results · showing ${visible.length}` : 'No matches in this scope'}</div>
@@ -105,7 +109,7 @@ export default function Search({ tables, onSelect }) {
       {results.length > limit && <button type="button" className="search-more" onClick={() => {
         setLimit((current) => current + 50); setActive(limit); inputRef.current?.focus();
       }}>Show more ({results.length - limit} remaining)</button>}
-      <div className="search-help">↑ ↓ Navigate · Enter Open · Esc Dismiss</div>
+      <div className="search-help">↑ ↓ Navigate · Enter {actionLabel} · Esc {onCancel ? 'Cancel' : 'Dismiss'}</div>
     </div>}
   </div>;
 }
