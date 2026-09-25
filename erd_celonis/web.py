@@ -73,14 +73,6 @@ def make_server(
             if path == "/api/graph":
                 self._send_bytes(graph_payload, "application/json; charset=utf-8", cache="no-store")
                 return
-            if path == "/api/graph.json":
-                self._send_bytes(
-                    graph_payload,
-                    "application/json; charset=utf-8",
-                    cache="no-store",
-                    content_disposition='attachment; filename="erd-celonis.json"',
-                )
-                return
             if path == "/api/health":
                 self._send_bytes(b'{"status":"ok"}', "application/json; charset=utf-8", cache="no-store")
                 return
@@ -158,15 +150,12 @@ def make_server(
             content_type: str,
             *,
             cache: str,
-            content_disposition: str | None = None,
             status: int = 200,
         ) -> None:
             self.send_response(status)
             self.send_header("Content-Type", content_type)
             self.send_header("Content-Length", str(len(payload)))
             self.send_header("Cache-Control", cache)
-            if content_disposition is not None:
-                self.send_header("Content-Disposition", content_disposition)
             self.send_header("X-Content-Type-Options", "nosniff")
             self.send_header("Referrer-Policy", "no-referrer")
             self.send_header(

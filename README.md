@@ -14,7 +14,6 @@ The explorer provides:
 - a resizable PQL console with syntax highlighting, schema autocomplete, per-model drafts, query results, and CSV export;
 - typo-tolerant search powered by Fuse.js across table aliases, physical names,
   and individual columns in the selected model scope, with highlighted matches;
-- export the loaded data model as a JSON file;
 - table and relationship inspectors with exact column mappings;
 - a relationship lens that fades unrelated parts of the model;
 - a shortest-path finder between two tables, with intermediate tables and exact

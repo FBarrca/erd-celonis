@@ -41,7 +41,6 @@ function Icon({ name, size = 18 }) {
     focus: <><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/><circle cx="12" cy="12" r="3"/></>,
     arrow: <><path d="M5 12h14M13 6l6 6-6 6"/></>,
     layers: <><path d="m12 2 9 5-9 5-9-5 9-5Z"/><path d="m3 12 9 5 9-5M3 17l9 5 9-5"/></>,
-    download: <><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></>,
   };
   return <svg className="icon" width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">{paths[name]}</svg>;
 }
@@ -477,7 +476,6 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, q
       <header className="topbar">
         <div className="brand"><span className="brand__mark"><span></span><span></span><span></span></span><div><span>ERD explorer</span><h1>{title}</h1></div></div>
         <div className="topbar__stats"><span><strong>{built.tables.length}</strong> tables</span><span><strong>{built.relationships.length}</strong> relations</span></div>
-        <a className="topbar__export" href="/api/graph.json" download="erd-celonis.json" title="Export the data model as JSON" aria-label="Export the data model as JSON"><Icon name="download" size={16}/><span className="topbar__export-label">Export JSON</span></a>
         <Search tables={built.tables} onSelect={focusResult} shortcut={!choosingDestination} onCancel={choosingDestination ? closePath : undefined}/>
       </header>
       <nav className="model-bar" aria-label="Data model filter">
