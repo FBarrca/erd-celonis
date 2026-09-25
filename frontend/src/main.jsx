@@ -7,6 +7,7 @@ import {
   Handle,
   MarkerType,
   MiniMap,
+  Panel,
   Position,
   ReactFlow,
   ReactFlowProvider,
@@ -20,6 +21,8 @@ import { findPath } from './findPath';
 import PathFinder from './PathFinder';
 import Search from './Search.jsx';
 import QueryPanel from './QueryPanel.jsx';
+import StickyNote from './StickyNote.jsx';
+import { noteNode, NOTE_WIDTH, NOTE_HEIGHT } from './stickyNotes.js';
 import { createDraftStore } from './queryDrafts.js';
 import { createViewStore, modelId, restorePositions, MIN_ZOOM, MAX_ZOOM } from './savedViews.js';
 
@@ -112,7 +115,7 @@ function TableCard({ data }) {
   );
 }
 
-const nodeTypes = { tableCard: TableCard };
+const nodeTypes = { tableCard: TableCard, stickyNote: StickyNote };
 
 function nodeHeight(table, shownColumns) {
   const footer = table.columns.length > shownColumns.length ? 32 : 0;
@@ -340,6 +343,8 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
   const searchFocusTimer = useRef(null);
   const viewReady = useRef(false);
   const scopeSelect = useRef(null);
+  const canvasRef = useRef(null);
+  const canvasPointer = useRef(null);
   useEffect(() => {
     if (restoreScopeFocus.current) {
       scopeSelect.current?.focus();
@@ -355,12 +360,45 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
   const startingTable = built.tables.find((table) => table.id === endpoints.from);
   const choosingDestination = pathOpen && Boolean(startingTable) && !endpoints.to;
   const path = useMemo(() => findPath(built.tables, built.relationships, endpoints.from, endpoints.to), [built, endpoints]);
-  const [nodes, setNodes, onNodesChange] = useNodesState(built.nodes);
+  const [nodes, setNodes, onNodesChange] = useNodesState([
+    ...built.nodes,
+    ...(savedView?.notes ?? []).filter((note) => !built.nodes.some((node) => node.id === note.id)).map((note) => noteNode(note)),
+  ]);
   const [edges, setEdges, onEdgesChange] = useEdgesState(built.edges);
 
   const saveView = useCallback(() => {
     if (viewReady.current && flow) views.save(graph, activeModel, flow.getNodes(), flow.getViewport());
   }, [flow, graph, activeModel, views]);
+
+  // Text edits, additions, and deletions are saved as well as drag/zoom changes.
+  // Scope changes and pagehide flush immediately through saveView.
+  useEffect(() => {
+    const timer = setTimeout(saveView, 150);
+    return () => clearTimeout(timer);
+  }, [nodes, saveView]);
+
+  const addNote = useCallback((pointer = null) => {
+    if (!flow || !canvasRef.current) return;
+    const bounds = canvasRef.current.getBoundingClientRect();
+    if (pointer && (pointer.x < bounds.left || pointer.x > bounds.right || pointer.y < bounds.top || pointer.y > bounds.bottom)) return;
+    const point = flow.screenToFlowPosition(pointer ?? { x: bounds.left + bounds.width / 2, y: bounds.top + bounds.height / 2 });
+    const position = { x: point.x - NOTE_WIDTH / 2, y: point.y - NOTE_HEIGHT / 2 };
+    const note = { id: `note:${crypto.randomUUID()}`, text: '', position };
+    setNodes((current) => [...current, noteNode(note, true)]);
+  }, [flow, setNodes]);
+
+  useEffect(() => {
+    const onKey = (event) => {
+      if (event.key.toLowerCase() !== 'n' || event.ctrlKey || event.metaKey || event.altKey || event.shiftKey
+        || event.repeat || event.isComposing || event.defaultPrevented || !canvasPointer.current) return;
+      const target = event.target;
+      if (target instanceof HTMLElement && (target.isContentEditable || target.closest('input, textarea, select, [role="textbox"]'))) return;
+      event.preventDefault();
+      addNote(canvasPointer.current);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [addNote]);
 
   const changeModel = (id) => {
     if (id === activeModel) return;
@@ -372,7 +410,7 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
   };
 
   useEffect(() => {
-    if (!flow || (!nodesInitialized && built.nodes.length)) return;
+    if (viewReady.current || !flow || (!nodesInitialized && built.nodes.length)) return;
     let cancelled = false;
     const restore = async () => {
       if (savedView?.viewport) await flow.setViewport(savedView.viewport);
@@ -380,7 +418,7 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
       if (!cancelled) viewReady.current = true;
     };
     void restore();
-    return () => { cancelled = true; viewReady.current = false; };
+    return () => { cancelled = true; };
   }, [flow, nodesInitialized, built, savedView]);
 
   useEffect(() => {
@@ -453,7 +491,7 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
         connectedEdges.add(relationship.key);
       }
     }
-    setNodes((current) => current.map((node) => ({ ...node, data: { ...node.data, onSelectTable: choosingDestination ? chooseDestination : selectTable, choosingDestination, isSelected: pathOpen ? connectedNodes.has(node.id) : selection?.kind === 'table' && node.id === selection.id, isDimmed: (tracingPath || Boolean(selection)) && !connectedNodes.has(node.id) } })));
+    setNodes((current) => current.map((node) => node.type === 'stickyNote' ? node : ({ ...node, data: { ...node.data, onSelectTable: choosingDestination ? chooseDestination : selectTable, choosingDestination, isSelected: pathOpen ? connectedNodes.has(node.id) : selection?.kind === 'table' && node.id === selection.id, isDimmed: (tracingPath || Boolean(selection)) && !connectedNodes.has(node.id) } })));
     setEdges((current) => current.map((edge) => {
       const active = connectedEdges.has(edge.id);
       return { ...edge, animated: active, className: `${active ? 'is-active' : ''} ${(tracingPath || selection) && !active ? 'is-dimmed' : ''}`, label: selection?.kind === 'relationship' && edge.id === selection.id ? edge.data.relationship.label : undefined };
@@ -504,7 +542,10 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
         <div className="topbar__stats"><span><strong>{built.tables.length}</strong> tables</span><span><strong>{built.relationships.length}</strong> relations</span></div>
         <Search tables={built.tables} onSelect={focusResult} shortcut={!choosingDestination} tableOnlyToggle={!choosingDestination} onCancel={choosingDestination ? closePath : undefined}/>
       </header>
-      <section className="canvas" aria-label="Entity relationship diagram">
+      <section ref={canvasRef} className="canvas" aria-label="Entity relationship diagram"
+        onPointerMove={(event) => { canvasPointer.current = { x: event.clientX, y: event.clientY }; }}
+        onPointerEnter={(event) => { canvasPointer.current = { x: event.clientX, y: event.clientY }; }}
+        onPointerLeave={() => { canvasPointer.current = null; }}>
         <ReactFlow
           nodes={nodes}
           edges={edges}
@@ -516,7 +557,7 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
           onSelectionDragStop={saveView}
           onMoveEnd={saveView}
           onPaneClick={() => setSelection(null)}
-          onNodeClick={(event, node) => { if (choosingDestination && !event.target.closest('button')) chooseDestination(node.id); }}
+          onNodeClick={(event, node) => { if (node.type === 'tableCard' && choosingDestination && !event.target.closest('button')) chooseDestination(node.id); }}
           onEdgeClick={(_event, edge) => { if (!choosingDestination) { setPathOpen(false); setSelection({ kind: 'relationship', id: edge.id }); } }}
           defaultViewport={savedView?.viewport ?? { x: 0, y: 0, zoom: 1 }}
           minZoom={MIN_ZOOM}
@@ -528,8 +569,15 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
           proOptions={{ hideAttribution: true }}
         >
           <Background color="#c7cfcc" gap={24} size={1} />
-          <MiniMap nodeColor={(node) => node.data.isDimmed ? '#c9cfcc' : '#86bd67'} maskColor="rgba(238, 242, 241, .78)" pannable zoomable />
+          <MiniMap nodeColor={(node) => node.type === 'stickyNote' ? '#f3d778' : node.data.isDimmed ? '#c9cfcc' : '#86bd67'} maskColor="rgba(238, 242, 241, .78)" pannable zoomable />
           <Controls showInteractive={false} />
+          <Panel position="top-right"><button type="button" className="add-note" onClick={() => addNote()} disabled={!flow}
+            title="Add note (N at pointer on canvas)" aria-label="Add sticky note" aria-keyshortcuts="N">
+            <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M5 3h14a2 2 0 0 1 2 2v10l-6 6H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Z" fill="#ffe9a0" />
+              <path d="M21 15h-4a2 2 0 0 0-2 2v4M7 8h10M7 12h7" />
+            </svg><kbd aria-hidden="true">N</kbd>
+          </button></Panel>
           {choosingDestination ? <div className="canvas-prompt" role="status">Choose a table to connect with <strong>{displayName(startingTable)}</strong><button type="button" onClick={closePath}>Cancel</button></div> : <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span></div>}
         </ReactFlow>
       </section>

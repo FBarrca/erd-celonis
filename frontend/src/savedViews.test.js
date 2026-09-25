@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createViewStore, modelId, restorePositions, validateView } from './savedViews.js';
+import { noteNode, MAX_NOTE_LENGTH, MAX_NOTE_TITLE_LENGTH } from './stickyNotes.js';
 
 function storage() {
   const records = new Map();
@@ -17,7 +18,7 @@ test('positions and viewport survive a new store instance', () => {
   const disk = storage();
   createViewStore(() => disk).save(graph, 'a', nodes, viewport);
   const view = createViewStore(() => disk).load(graph, 'a');
-  assert.deepEqual(view, { version: 1, positions: { 'a/orders': nodes[0].position }, viewport });
+  assert.deepEqual(view, { version: 1, positions: { 'a/orders': nodes[0].position }, viewport, notes: [] });
   nodes[0].position.x = 99;
   assert.equal(view.positions['a/orders'].x, -125);
   nodes[0].position.x = -125;
@@ -102,7 +103,7 @@ test('malformed records, invalid coordinates, and out-of-range zoom are ignored'
   const positions = { valid: { x: -10, y: 20 }, bad: { x: Infinity, y: 0 }, string: { x: '1', y: 0 }, missing: null };
   for (const zoom of [0, -1, 0.01, 3, Infinity, '1', null]) {
     assert.deepEqual(validateView({ version: 1, positions, viewport: { x: 0, y: 0, zoom } }), {
-      version: 1, positions: { valid: { x: -10, y: 20 } }, viewport: null,
+      version: 1, positions: { valid: { x: -10, y: 20 } }, viewport: null, notes: [],
     });
   }
   assert.equal(validateView({ version: 1, positions: {}, viewport: { ...viewport, x: NaN } }).viewport, null);
@@ -126,4 +127,60 @@ test('denied access and quota failures preserve in-memory scope views', () => {
     assert.equal(views.load(graph, 'b').viewport.zoom, 1);
     assert.equal(views.loadScope(graph), 'a');
   }
+});
+
+test('sticky note text and positions survive reloads and remain isolated by model and pool', () => {
+  const disk = storage();
+  const note = { id: 'note:one', title: 'Join review', text: 'Check this join\nKeep <script> as plain text.', position: { x: -30, y: 140 } };
+  const views = createViewStore(() => disk);
+  views.save(graph, 'a', [...nodes, noteNode(note, true)], viewport);
+  views.save(graph, 'b', [], viewport);
+  const reopened = createViewStore(() => disk);
+  assert.deepEqual(reopened.load(graph, 'a').notes, [note]);
+  assert.deepEqual(reopened.load(graph, 'a').positions, { 'a/orders': nodes[0].position });
+  assert.deepEqual(reopened.load(graph, 'b').notes, []);
+  assert.equal(reopened.load({ ...graph, metadata: { data_pool_id: 'another' } }, 'a'), null);
+  assert.equal(JSON.stringify([...disk.records.values()]).includes('autoFocus'), false);
+  const moved = { ...note, title: 'Reviewed', text: 'Updated', position: { x: 700, y: 90 } };
+  reopened.save(graph, 'a', [...nodes, noteNode(moved)], viewport);
+  assert.deepEqual(createViewStore(() => disk).load(graph, 'a').notes, [moved]);
+  reopened.save(graph, 'a', nodes, viewport);
+  assert.deepEqual(createViewStore(() => disk).load(graph, 'a').notes, []);
+});
+
+test('legacy layouts load without notes and malformed notes do not discard valid layout data', () => {
+  const legacy = { version: 1, positions: { table: { x: 12, y: 34 } }, viewport };
+  assert.deepEqual(validateView(legacy).notes, []);
+  const good = { id: 'note:valid', title: '', text: '', position: { x: 5, y: -10 } };
+  const view = validateView({ ...legacy, notes: [
+    null, {}, good, { ...good, text: 'Duplicate' },
+    { ...good, id: 'table' }, { ...good, id: 'note:bad', position: { x: '0', y: 1 } },
+    { ...good, id: 'note:bad2', position: { x: Infinity, y: 1 } },
+    { ...good, id: 'note:bad3', text: {} },
+  ] });
+  assert.deepEqual(view.notes, [good]);
+  assert.deepEqual(view.positions, legacy.positions);
+  assert.deepEqual(validateView({ ...legacy, notes: {} }).notes, []);
+  assert.deepEqual(validateView({ ...legacy, positions: { 'note:valid': { x: 0, y: 0 } }, notes: [good] }).notes, []);
+  assert.equal(validateView({ ...legacy, notes: [{ ...good, text: 'x'.repeat(MAX_NOTE_LENGTH + 1) }] }).notes[0].text.length, MAX_NOTE_LENGTH);
+});
+
+test('notes remain available across model switches when browser storage is unavailable', () => {
+  const views = createViewStore(() => { throw new Error('Storage blocked'); });
+  const note = { id: 'note:offline', title: '', text: 'Remember this', position: { x: 0, y: 0 } };
+  views.save(graph, 'a', [...nodes, noteNode(note)], viewport);
+  views.save(graph, 'b', [], viewport);
+  assert.deepEqual(views.load(graph, 'a').notes, [note]);
+  assert.deepEqual(views.load(graph, 'b').notes, []);
+});
+
+test('existing untitled notes load and invalid titles do not discard note text', () => {
+  const note = { id: 'note:legacy', text: 'Keep my Markdown', position: { x: 20, y: 40 } };
+  const view = (title) => validateView({ version: 1, positions: {}, notes: [{ ...note, title }] });
+  for (const title of [undefined, null, 42, {}]) {
+    assert.deepEqual(view(title).notes, [{ ...note, title: '' }]);
+  }
+  assert.equal(view('a'.repeat(MAX_NOTE_TITLE_LENGTH + 1)).notes[0].title.length, MAX_NOTE_TITLE_LENGTH);
+  assert.equal(view('Two\nlines').notes[0].title, 'Two lines');
+  assert.equal(noteNode(note).data.title, '');
 });

@@ -71,6 +71,22 @@ button { color: inherit; }
 .scope-control > .icon { pointer-events: none; }
 
 .canvas { min-height: 0; transition: margin-right .25s ease; }
+.add-note { position: relative; display: grid; place-items: center; width: 40px; height: 40px; padding: 5px 7px 7px 5px; color: #806b30; background: #fff2b8; border: 1px solid #d8c37d; border-radius: 6px; box-shadow: 0 3px 10px #29352e12; cursor: pointer; }
+.add-note:hover { background: #ffe99c; }
+.add-note kbd { position: absolute; right: 3px; bottom: 2px; color: #806b30; font: 9px/1 ui-monospace, monospace; }
+.add-note:disabled { opacity: .5; cursor: default; }
+.add-note:focus-visible, .sticky-note button:focus-visible { outline: 2px solid var(--blue); outline-offset: 2px; }
+.sticky-note { width: 260px; height: 220px; overflow: hidden; color: #514421; background: #fff4bd; border: 1px solid #d8c37d; border-radius: 4px 4px 14px 4px; box-shadow: 2px 8px 18px #51442120; }
+.sticky-note:focus-within { border-color: #b59941; box-shadow: 0 0 0 2px #d8c37d55, 2px 8px 18px #51442120; }
+.sticky-note__header { height: 38px; display: flex; align-items: center; gap: 4px; padding: 4px 6px; background: #f8e59f; border-bottom: 1px solid #ddc984; cursor: grab; user-select: none; }
+.sticky-note__header:active { cursor: grabbing; }
+.sticky-note__grip { flex: none; color: #9b8240; }
+.sticky-note__title { width: 0; min-width: 0; flex: 1; padding: 4px; color: inherit; background: transparent; border: 1px solid transparent; border-radius: 3px; font: 700 12px/1.4 "Segoe UI", sans-serif; text-overflow: ellipsis; }
+.sticky-note__title::placeholder { color: #806b30; font-weight: 600; }
+.sticky-note__title:focus { outline: 0; border-color: #b59941; background: #fff4bd; }
+.sticky-note__header button { flex: none; width: 28px; height: 28px; padding: 0; border: 0; border-radius: 4px; color: #665326; background: transparent; font-size: 22px; cursor: pointer; }
+.sticky-note__header button:hover { background: #ecd486; }
+.sticky-note__editor { height: calc(100% - 38px); cursor: text; }
 .has-inspector .canvas { margin-right: 380px; }
 .react-flow__pane { cursor: grab; }.react-flow__pane:active { cursor: grabbing; }
 .react-flow__node { width: auto; border-radius: 9px; }

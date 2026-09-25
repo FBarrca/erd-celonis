@@ -1,3 +1,5 @@
+import { validateNotes } from './stickyNotes.js';
+
 export const MIN_ZOOM = 0.08;
 export const MAX_ZOOM = 2;
 const PREFIX = 'erd-celonis:view:v1:';
@@ -33,7 +35,8 @@ export function validateView(record) {
     .filter(([, point]) => validPoint(point)).map(([id, { x, y }]) => [id, { x, y }]));
   const viewport = validViewport(record.viewport)
     ? { x: record.viewport.x, y: record.viewport.y, zoom: record.viewport.zoom } : null;
-  return { version: 1, positions, viewport };
+  const notes = validateNotes(record.notes).filter((note) => !Object.hasOwn(positions, note.id));
+  return { version: 1, positions, viewport, notes };
 }
 
 export function createViewStore(getStorage = () => window.localStorage) {
@@ -56,7 +59,12 @@ export function createViewStore(getStorage = () => window.localStorage) {
   return {
     load(graph, scope) { return validateView(read(keyFor(graph, scope))); },
     save(graph, scope, nodes, viewport) {
-      const view = validateView({ version: 1, positions: Object.fromEntries(nodes.map((node) => [node.id, node.position])), viewport });
+      const view = validateView({
+        version: 1,
+        positions: Object.fromEntries(nodes.filter((node) => node.type !== 'stickyNote').map((node) => [node.id, node.position])),
+        viewport,
+        notes: nodes.filter((node) => node.type === 'stickyNote').map((node) => ({ id: node.id, title: node.data.title, text: node.data.text, position: node.position })),
+      });
       if (view) write(keyFor(graph, scope), view);
     },
     loadScope(graph) {

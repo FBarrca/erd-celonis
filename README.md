@@ -182,11 +182,22 @@ precision; dates use ISO text and missing values display as `NULL`.
 
 ### Remember diagram views
 
-Table positions, pan, and zoom are saved automatically in browser local storage.
+Table positions, sticky notes, pan, and zoom are saved automatically in browser local storage.
 Reopening the same data model restores its latest view, including after stopping
 and restarting the server. Views are matched by Celonis pool and model IDs, so
 renaming a model does not lose its layout. Each model tab has its own view,
 and the last selected model is restored when reopening, if still available.
+
+Use the yellow **Add sticky note** icon in the canvas to add a note. Click its title
+to name it, type Markdown in the body, drag the dotted header grip to move it,
+and use its × button to delete it. Titles, text, and positions
+save automatically per model and return after a refresh. Notes are personal to
+this browser and are not sent to Celonis or included in DDL exports.
+Notes use CodeMirror with Markdown highlighting for headings, bold and italic
+text, links, lists, and code. The Markdown source stays editable, with undo/redo;
+notes are saved as plain text and do not render HTML.
+Press **N** while the pointer is over the canvas to place a note centered on the pointer.
+The shortcut is inactive while typing in a note, search field, or PQL editor.
 
 Existing tables keep their saved positions when the schema changes. New tables
 appear to the right of the saved arrangement. Search text, inspectors, selections,
