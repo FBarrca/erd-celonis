@@ -22,6 +22,8 @@ import PathFinder from './PathFinder';
 import Search from './Search.jsx';
 import QueryPanel from './QueryPanel.jsx';
 import StickyNote from './StickyNote.jsx';
+import StateTransfer from './StateTransfer.jsx';
+import { createDatapoolState, loadImportedGraph, rememberImportedGraph } from './datapoolState.js';
 import { noteNode, NOTE_WIDTH, NOTE_HEIGHT } from './stickyNotes.js';
 import { createDraftStore } from './queryDrafts.js';
 import { createViewStore, modelId, restorePositions, MIN_ZOOM, MAX_ZOOM } from './savedViews.js';
@@ -321,8 +323,15 @@ function InspectorHeader({ eyebrow, title, onClose }) {
   return <header className="inspector__header"><div><span>{eyebrow}</span><h2>{title}</h2></div><button type="button" onClick={onClose} aria-label="Close inspector"><Icon name="close"/></button></header>;
 }
 
-function Diagram({ graph }) {
-  const [views] = useState(() => createViewStore());
+function Diagram({ graph, snapshot, offline, onImport }) {
+  const [views] = useState(() => {
+    const store = createViewStore();
+    if (snapshot) {
+      for (const [scope, view] of Object.entries(snapshot.views)) store.restore(graph, scope, view);
+      store.saveScope(graph, snapshot.activeModel);
+    }
+    return store;
+  });
   const [drafts] = useState(() => createDraftStore());
   const [queryOpen, setQueryOpen] = useState(true);
   const [queryHeight, setQueryHeight] = useState(320);
@@ -331,10 +340,11 @@ function Diagram({ graph }) {
   const [activeModel, setActiveModel] = useState(() => views.loadScope(graph));
   // Each scope owns its React Flow lifecycle, including pending viewport animations.
   return <ReactFlowProvider key={activeModel}><Explorer graph={graph} models={models} activeModel={activeModel} setActiveModel={setActiveModel} views={views}
-    drafts={drafts} restoreScopeFocus={restoreScopeFocus} queryOpen={queryOpen} setQueryOpen={setQueryOpen} queryHeight={queryHeight} setQueryHeight={setQueryHeight}/></ReactFlowProvider>;
+    drafts={drafts} restoreScopeFocus={restoreScopeFocus} queryOpen={queryOpen} setQueryOpen={setQueryOpen} queryHeight={queryHeight} setQueryHeight={setQueryHeight}
+    offline={offline} onImport={onImport}/></ReactFlowProvider>;
 }
 
-function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, restoreScopeFocus, queryOpen, setQueryOpen, queryHeight, setQueryHeight }) {
+function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, restoreScopeFocus, queryOpen, setQueryOpen, queryHeight, setQueryHeight, offline, onImport }) {
   const [savedView] = useState(() => views.load(graph, activeModel));
   const [selection, setSelection] = useState(null);
   const [pathOpen, setPathOpen] = useState(false);
@@ -369,6 +379,21 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
   const saveView = useCallback(() => {
     if (viewReady.current && flow) views.save(graph, activeModel, flow.getNodes(), flow.getViewport());
   }, [flow, graph, activeModel, views]);
+
+  const exportState = () => {
+    saveView();
+    const layouts = Object.fromEntries(models.map(([scope]) => {
+      const saved = views.load(graph, scope);
+      const tables = graph.tables.filter(table => modelId(graph, table) === scope);
+      // Include deterministic positions even for models that have never been opened.
+      const positions = saved && tables.every(table => Object.hasOwn(saved.positions, table.id))
+        ? Object.fromEntries(tables.map(table => [table.id, saved.positions[table.id]]))
+        : Object.fromEntries(restorePositions(buildElements(graph, scope, selectTable).nodes, saved, NODE_WIDTH, HORIZONTAL_GAP)
+          .map(node => [node.id, node.position]));
+      return [scope, { version: 1, positions, viewport: saved?.viewport ?? null, notes: saved?.notes ?? [] }];
+    }));
+    return createDatapoolState(graph, activeModel, layouts);
+  };
 
   // Text edits, additions, and deletions are saved as well as drag/zoom changes.
   // Scope changes and pagehide flush immediately through saveView.
@@ -527,7 +552,7 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
 
   const title = graph.metadata.data_pool_name || graph.metadata.data_model_name || 'Celonis data model';
   return (
-    <main className={`app-shell has-query-panel ${selection || pathOpen ? 'has-inspector' : ''}`} style={{ '--query-height': queryOpen ? `min(${queryHeight}px, 60dvh)` : '42px' }}>
+    <main className={`app-shell ${offline ? '' : 'has-query-panel'} ${selection || pathOpen ? 'has-inspector' : ''}`} style={{ '--query-height': queryOpen ? `min(${queryHeight}px, 60dvh)` : '42px' }}>
       <header className="topbar">
         <div className="brand"><span className="brand__mark" aria-hidden="true"><span></span><span></span><span></span></span><div><span>ERD Explorer</span><h1 title={title}>{title}</h1></div></div>
         <label className="scope-control">
@@ -539,6 +564,7 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
           </span>
           <Icon name="chevron" size={16}/>
         </label>
+        <StateTransfer onImport={snapshot => { saveView(); onImport(snapshot); }} onExport={flow ? exportState : null}/>
         <div className="topbar__stats"><span><strong>{built.tables.length}</strong> tables</span><span><strong>{built.relationships.length}</strong> relations</span></div>
         <Search tables={built.tables} onSelect={focusResult} shortcut={!choosingDestination} tableOnlyToggle={!choosingDestination} onCancel={choosingDestination ? closePath : undefined}/>
       </header>
@@ -581,25 +607,36 @@ function Explorer({ graph, models, activeModel, setActiveModel, views, drafts, r
           {choosingDestination ? <div className="canvas-prompt" role="status">Choose a table to connect with <strong>{displayName(startingTable)}</strong><button type="button" onClick={closePath}>Cancel</button></div> : <div className="canvas-legend"><span><i className="dot dot--pk"></i>Primary key</span><span><i className="dot dot--fk"></i>Foreign key</span></div>}
         </ReactFlow>
       </section>
-      <QueryPanel poolId={graph.metadata.data_pool_id} modelId={activeModel} modelName={models.find(([id]) => id === activeModel)?.[1] || activeModel}
+      {!offline && <QueryPanel poolId={graph.metadata.data_pool_id} modelId={activeModel} modelName={models.find(([id]) => id === activeModel)?.[1] || activeModel}
         tables={built.tables} drafts={drafts} open={queryOpen} height={queryHeight} onToggle={() => setQueryOpen(value => !value)}
-        onResize={height => setQueryHeight(Math.max(220, Math.min(650, height)))}/>
+        onResize={height => setQueryHeight(Math.max(220, Math.min(650, height)))}/>}
       {pathOpen ? <PathFinder tables={built.tables} from={endpoints.from} to={endpoints.to} onDestination={chooseDestination} onChangeDestination={() => setEndpoints((current) => ({ ...current, to: '' }))} result={path} onClose={closePath} onFit={fitPath} /> : <DetailPanel selection={selection} graph={graph} onClose={() => setSelection(null)} onFindPath={openPath} onSelectTable={(id) => { selectTable(id); flow?.fitView({ nodes: [{ id }], padding: 0.7, duration: 500, maxZoom: 1.2 }); }} />}
     </main>
   );
 }
 
 function App() {
-  const [state, setState] = useState({ loading: true, graph: null, error: null });
+  const [state, setState] = useState({ loading: true, graph: null, error: null, revision: 0 });
+  const importState = snapshot => {
+    const remembered = rememberImportedGraph(snapshot.graph);
+    setState(current => ({ loading: false, graph: snapshot.graph, snapshot, offline: true, error: null,
+      revision: current.revision + 1, storageWarning: !remembered }));
+  };
   useEffect(() => {
     fetch('/api/graph').then((response) => {
       if (!response.ok) throw new Error(`Server returned ${response.status}`);
       return response.json();
-    }).then((graph) => setState({ loading: false, graph, error: null })).catch((error) => setState({ loading: false, graph: null, error: error.message }));
+    }).then((graph) => setState({ loading: false, graph: graph ?? loadImportedGraph(), offline: !graph, error: null, revision: 0 }))
+      .catch((error) => setState({ loading: false, graph: null, error: error.message, revision: 0 }));
   }, []);
   if (state.loading) return <div className="state-screen"><span className="loader"></span><h1>Arranging the data model</h1><p>Placing tables and tracing foreign keys…</p></div>;
   if (state.error) return <div className="state-screen state-screen--error"><h1>The model could not be loaded</h1><p>{state.error}. Check the terminal that started this server, then refresh.</p><button type="button" onClick={() => window.location.reload()}>Try again</button></div>;
-  return <Diagram graph={state.graph}/>;
+  if (!state.graph) return <main className="app-shell">
+    <header className="topbar"><div className="brand"><h1>ERD Explorer</h1></div><StateTransfer onImport={importState}/></header>
+    <div className="state-screen"><h1>Open a saved datapool</h1><p>Choose Import datapool above to restore tables, relationships, layouts, and sticky notes.</p><p>No Celonis connection is needed.</p></div>
+  </main>;
+  return <><Diagram key={state.revision} graph={state.graph} snapshot={state.snapshot} offline={state.offline} onImport={importState}/>
+    {state.storageWarning && <div className="storage-warning" role="status">Browser storage is unavailable or full. Export your work before closing this page.</div>}</>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);

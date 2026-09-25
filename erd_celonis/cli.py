@@ -127,7 +127,7 @@ class _StatusLine:
 
 
 def erd(
-    pool_id: str,
+    pool_id: str | None = None,
     data_model_id: str | None = None,
     include_columns: bool = True,
     key_type: str | None = None,
@@ -139,7 +139,8 @@ def erd(
     """Serve an interactive ERD or export SQL-like DDL from a Celonis data pool.
 
     Args:
-        pool_id: Celonis data pool ID.
+        pool_id: Celonis data pool ID. Omit to open an offline workspace
+            and import a previously exported datapool state.
         data_model_id: Optional data model ID. If omitted, all data models
             in the pool are loaded.
         include_columns: Fetch and render table columns when true.
@@ -151,6 +152,12 @@ def erd(
         ddl: Write a compact SQL-like schema description to stdout instead of
             starting the interactive explorer.
     """
+
+    if not pool_id:
+        if ddl or data_model_id:
+            raise ValueError("A data pool ID is required for --ddl or a data model ID.")
+        serve_graph(None, host=host, port=port, open_browser=open_browser)
+        return
 
     # DDL is intended to be piped into another process, so keep stdout pure.
     status = _StatusLine(stderr=ddl)

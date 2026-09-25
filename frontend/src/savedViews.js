@@ -58,6 +58,10 @@ export function createViewStore(getStorage = () => window.localStorage) {
   }
   return {
     load(graph, scope) { return validateView(read(keyFor(graph, scope))); },
+    restore(graph, scope, record) {
+      const view = validateView(record);
+      if (view) write(keyFor(graph, scope), view);
+    },
     save(graph, scope, nodes, viewport) {
       const view = validateView({
         version: 1,

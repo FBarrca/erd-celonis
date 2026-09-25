@@ -40,7 +40,7 @@ def graph_to_dict(graph: ERDGraph) -> dict[str, Any]:
 
 
 def make_server(
-    graph: ERDGraph,
+    graph: ERDGraph | None = None,
     *,
     host: str = "127.0.0.1",
     port: int = 8000,
@@ -48,11 +48,11 @@ def make_server(
 ) -> ThreadingHTTPServer:
     """Create, but do not start, an HTTP server for ``graph``."""
 
-    if not graph.number_of_nodes():
+    if graph is not None and not graph.number_of_nodes():
         raise ValueError("Cannot serve an ERD with no data-model tables.")
 
     graph_payload = json.dumps(
-        graph_to_dict(graph),
+        graph_to_dict(graph) if graph is not None else None,
         ensure_ascii=False,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -176,7 +176,7 @@ def make_server(
 
 
 def serve_graph(
-    graph: ERDGraph,
+    graph: ERDGraph | None = None,
     *,
     host: str = "127.0.0.1",
     port: int = 8000,

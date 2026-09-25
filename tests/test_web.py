@@ -78,6 +78,47 @@ def test_empty_graph_cannot_start_server():
         make_server(ERDGraph(), port=0)
 
 
+def test_offline_server_serves_empty_workspace_without_query_access():
+    server = make_server(port=0)
+    thread = Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        with urlopen(f"{base}/api/graph", timeout=5) as response:
+            assert json.load(response) is None
+        with urlopen(f"{base}/api/query-config", timeout=5) as response:
+            assert json.load(response)["enabled"] is False
+        with urlopen(base, timeout=5) as response:
+            assert "Celonis ERD Explorer" in response.read().decode()
+    finally:
+        server.shutdown()
+        server.server_close()
+        thread.join(timeout=5)
+
+
+def test_cli_without_pool_starts_offline_without_authentication(monkeypatch):
+    import builtins
+    import erd_celonis.cli as cli
+
+    real_import = builtins.__import__
+
+    def guard(name, *args, **kwargs):
+        assert name not in {"celofast", "dotenv"}, "Offline mode must not load credentials or connect"
+        return real_import(name, *args, **kwargs)
+
+    serve = Mock()
+    monkeypatch.setattr(cli, "serve_graph", serve)
+    monkeypatch.setattr(builtins, "__import__", guard)
+    cli.erd(port=8123, open_browser=False)
+    serve.assert_called_once_with(None, host="127.0.0.1", port=8123, open_browser=False)
+
+
+@pytest.mark.parametrize("kwargs", [{"ddl": True}, {"data_model_id": "model"}])
+def test_cli_offline_rejects_options_requiring_a_pool(kwargs):
+    with pytest.raises(ValueError, match="data pool ID is required"):
+        erd(**kwargs)
+
+
 def test_server_serves_ui_json_and_hashed_assets(sample_graph):
     server = make_server(sample_graph, port=0)
     thread = Thread(target=server.serve_forever, daemon=True)
