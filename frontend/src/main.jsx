@@ -11,6 +11,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   useEdgesState,
+  useNodesInitialized,
   useNodesState,
 } from '@xyflow/react';
 import '@xyflow/react/dist/style.css';
@@ -18,6 +19,7 @@ import './styles.css';
 import { findPath } from './findPath';
 import PathFinder from './PathFinder';
 import Search from './Search.jsx';
+import { createViewStore, modelId, restorePositions, MIN_ZOOM, MAX_ZOOM } from './savedViews.js';
 
 const NODE_WIDTH = 286;
 const ROW_HEIGHT = 31;
@@ -185,7 +187,7 @@ function relationshipAwarePositions(layout, tables, columnMap) {
 }
 
 function buildElements(graph, activeModel, onSelectTable) {
-  const tables = activeModel === 'all' ? graph.tables : graph.tables.filter((table) => String(table.data_model_id) === activeModel);
+  const tables = activeModel === 'all' ? graph.tables : graph.tables.filter((table) => modelId(graph, table) === activeModel);
   const tableIds = new Set(tables.map((table) => table.id));
   const relationships = graph.relationships.filter((relationship) => tableIds.has(relationship.source) && tableIds.has(relationship.target));
   const foreignByTable = new Map(tables.map((table) => [table.id, new Set()]));
@@ -309,21 +311,67 @@ function InspectorHeader({ eyebrow, title, onClose }) {
   return <header className="inspector__header"><div><span>{eyebrow}</span><h2>{title}</h2></div><button type="button" onClick={onClose} aria-label="Close inspector"><Icon name="close"/></button></header>;
 }
 
-function Explorer({ graph }) {
-  const models = useMemo(() => [...new Map(graph.tables.map((table) => [String(table.data_model_id), table.data_model_name || table.data_model_id])).entries()], [graph]);
-  const [activeModel, setActiveModel] = useState(models.length === 1 ? models[0][0] : 'all');
+function Diagram({ graph }) {
+  const [views] = useState(() => createViewStore());
+  const models = useMemo(() => [...new Map(graph.tables.map((table) => [modelId(graph, table), table.data_model_name || graph.metadata.data_model_name || modelId(graph, table)])).entries()], [graph]);
+  const [activeModel, setActiveModel] = useState(() => views.loadScope(graph));
+  // Each scope owns its React Flow lifecycle, including pending viewport animations.
+  return <ReactFlowProvider key={activeModel}><Explorer graph={graph} models={models} activeModel={activeModel} setActiveModel={setActiveModel} views={views}/></ReactFlowProvider>;
+}
+
+function Explorer({ graph, models, activeModel, setActiveModel, views }) {
+  const [savedView] = useState(() => views.load(graph, activeModel));
   const [selection, setSelection] = useState(null);
   const [pathOpen, setPathOpen] = useState(false);
   const [endpoints, setEndpoints] = useState({ from: '', to: '' });
   const [flow, setFlow] = useState(null);
   const searchFocusTimer = useRef(null);
+  const viewReady = useRef(false);
+  const nodesInitialized = useNodesInitialized();
   const selectTable = useCallback((id) => { setPathOpen(false); setSelection({ kind: 'table', id }); }, []);
-  const built = useMemo(() => buildElements(graph, activeModel, selectTable), [graph, activeModel, selectTable]);
+  const built = useMemo(() => {
+    const elements = buildElements(graph, activeModel, selectTable);
+    return { ...elements, nodes: restorePositions(elements.nodes, savedView, NODE_WIDTH, HORIZONTAL_GAP) };
+  }, [graph, activeModel, selectTable, savedView]);
   const startingTable = built.tables.find((table) => table.id === endpoints.from);
   const choosingDestination = pathOpen && Boolean(startingTable) && !endpoints.to;
   const path = useMemo(() => findPath(built.tables, built.relationships, endpoints.from, endpoints.to), [built, endpoints]);
   const [nodes, setNodes, onNodesChange] = useNodesState(built.nodes);
   const [edges, setEdges, onEdgesChange] = useEdgesState(built.edges);
+
+  const saveView = useCallback(() => {
+    if (viewReady.current && flow) views.save(graph, activeModel, flow.getNodes(), flow.getViewport());
+  }, [flow, graph, activeModel, views]);
+
+  const changeModel = (id) => {
+    if (id === activeModel) return;
+    saveView();
+    viewReady.current = false;
+    views.saveScope(graph, id);
+    setActiveModel(id);
+  };
+
+  useEffect(() => {
+    if (!flow || (!nodesInitialized && built.nodes.length)) return;
+    let cancelled = false;
+    const restore = async () => {
+      if (savedView?.viewport) await flow.setViewport(savedView.viewport);
+      else await flow.fitView({ padding: 0.15, maxZoom: 1 });
+      if (!cancelled) viewReady.current = true;
+    };
+    void restore();
+    return () => { cancelled = true; viewReady.current = false; };
+  }, [flow, nodesInitialized, built, savedView]);
+
+  useEffect(() => {
+    const onVisibility = () => { if (document.visibilityState === 'hidden') saveView(); };
+    window.addEventListener('pagehide', saveView);
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      window.removeEventListener('pagehide', saveView);
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [saveView]);
 
   const chooseDestination = useCallback((id) => {
     setEndpoints((current) => id === current.from ? current : { ...current, to: id });
@@ -360,14 +408,6 @@ function Explorer({ graph }) {
     setSelection(null);
     setPathOpen(true);
   };
-
-  useEffect(() => {
-    setSelection(null);
-    clearTimeout(searchFocusTimer.current);
-    setNodes(built.nodes);
-    setEdges(built.edges);
-    requestAnimationFrame(() => flow?.fitView({ padding: 0.15, duration: 500, maxZoom: 1 }));
-  }, [built, flow, setEdges, setNodes]);
 
   useEffect(() => {
     const connectedNodes = new Set();
@@ -438,8 +478,8 @@ function Explorer({ graph }) {
       </header>
       <nav className="model-bar" aria-label="Data model filter">
         <Icon name="layers" size={16}/><span className="model-bar__label">Scope</span>
-        {models.length > 1 && <button type="button" className={activeModel === 'all' ? 'is-active' : ''} onClick={() => setActiveModel('all')}>All models</button>}
-        {models.map(([id, name]) => <button type="button" key={id} className={activeModel === id ? 'is-active' : ''} onClick={() => setActiveModel(id)}>{name}</button>)}
+        {models.length > 1 && <button type="button" className={activeModel === 'all' ? 'is-active' : ''} onClick={() => changeModel('all')}>All models</button>}
+        {models.map(([id, name]) => <button type="button" key={id} className={activeModel === id ? 'is-active' : ''} onClick={() => changeModel(id)}>{name}</button>)}
         <span className="model-bar__hint">Select a table to trace its neighborhood</span>
       </nav>
       <section className="canvas" aria-label="Entity relationship diagram">
@@ -450,13 +490,15 @@ function Explorer({ graph }) {
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onInit={setFlow}
+          onNodeDragStop={saveView}
+          onSelectionDragStop={saveView}
+          onMoveEnd={saveView}
           onPaneClick={() => setSelection(null)}
           onNodeClick={(event, node) => { if (choosingDestination && !event.target.closest('button')) chooseDestination(node.id); }}
           onEdgeClick={(_event, edge) => { if (!choosingDestination) { setPathOpen(false); setSelection({ kind: 'relationship', id: edge.id }); } }}
-          fitView
-          fitViewOptions={{ padding: 0.15, maxZoom: 1 }}
-          minZoom={0.08}
-          maxZoom={2}
+          defaultViewport={savedView?.viewport ?? { x: 0, y: 0, zoom: 1 }}
+          minZoom={MIN_ZOOM}
+          maxZoom={MAX_ZOOM}
           panOnScroll
           zoomOnScroll={false}
           zoomOnPinch
@@ -484,7 +526,7 @@ function App() {
   }, []);
   if (state.loading) return <div className="state-screen"><span className="loader"></span><h1>Arranging the data model</h1><p>Placing tables and tracing foreign keys…</p></div>;
   if (state.error) return <div className="state-screen state-screen--error"><h1>The model could not be loaded</h1><p>{state.error}. Check the terminal that started this server, then refresh.</p><button type="button" onClick={() => window.location.reload()}>Try again</button></div>;
-  return <ReactFlowProvider><Explorer graph={state.graph}/></ReactFlowProvider>;
+  return <Diagram graph={state.graph}/>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
