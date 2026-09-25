@@ -109,6 +109,12 @@ expose the explorer and its query access on your network. The graph is fetched
 once by the CLI and served from memory. PQL queries use that CLI's authenticated
 connection and permissions; Celonis credentials remain on the Python server.
 
+Schema loading shares one pool of up to 10 workers across all selected models,
+matching the SDK's default HTTP connection limit.
+Table and foreign-key metadata requests run concurrently, followed by column
+requests across models with one combined progress total. At most 10 requests
+are submitted at a time; model, table, and relationship order stays stable.
+
 ### Run PQL queries
 
 The **PQL console** at the bottom runs against the selected model tab. Write one

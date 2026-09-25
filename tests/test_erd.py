@@ -1,11 +1,14 @@
 from dataclasses import dataclass, field
+from concurrent.futures import ThreadPoolExecutor
 import sys
+from threading import Barrier, Event, get_ident
 from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
 
 import erd_celonis.cli as cli
+import erd_celonis.erd as erd_module
 from erd_celonis.cli import _StatusLine, _configured_key_type
 from erd_celonis.erd import (
     ERDGraph,
@@ -139,11 +142,9 @@ def test_build_data_model_graph_reports_metadata_progress():
     build_data_model_graph(model, progress=messages.append)
 
     assert messages == [
-        "Fetching table metadata...",
+        "Fetching table and foreign-key metadata for 1 data model(s)...",
         "Found 1 table(s).",
-        "Fetching foreign-key metadata...",
         "Found 0 foreign-key relationship(s).",
-        "Preparing 1 table(s)...",
         "Fetching columns (0/1)...",
         "Fetched columns (1/1): ORDERS",
     ]
@@ -234,6 +235,169 @@ def test_build_data_pool_graph_namespaces_models_and_can_select_one_model():
     model_b_table = next(table for table in all_models.tables if table.id == "model-b/table:table-b")
     assert model_b_table.data_model_name == "B"
     assert {table.id for table in selected.tables} == {"model-b/table:table-b"}
+
+
+class SchemaProgress:
+    def __init__(self):
+        self.thread_id = get_ident()
+        self.events = []
+
+    def record(self, *event):
+        assert get_ident() == self.thread_id
+        self.events.append(event)
+
+    def __call__(self, message):
+        self.record("message", message)
+
+    def start_columns(self, total):
+        self.record("start", total)
+
+    def update_columns(self, completed, table_name):
+        self.record("update", completed, table_name)
+
+    def finish_columns(self):
+        self.record("finish")
+
+
+def test_pool_overlaps_metadata_and_columns_across_models_in_source_order():
+    metadata_barrier = Barrier(4, timeout=5)
+    columns_barrier = Barrier(4, timeout=5)
+    last_table_started = Event()
+
+    class ConcurrentTable(Table):
+        def get_columns(self):
+            columns_barrier.wait()
+            if self.name == "model-a-orders":
+                assert last_table_started.wait(5)
+            if self.name == "model-b-items":
+                last_table_started.set()
+            return [Column(self.name)]
+
+    class ConcurrentModel(DataModel):
+        def get_tables(self):
+            metadata_barrier.wait()
+            return self.tables
+
+        def get_foreign_keys(self):
+            metadata_barrier.wait()
+            return self.foreign_keys
+
+    models = [ConcurrentModel(model_id, model_id, [
+        ConcurrentTable("orders", f"{model_id}-orders"),
+        ConcurrentTable("items", f"{model_id}-items"),
+    ], [ForeignKey("join", "items", "orders", [ForeignKeyColumn("ORDER_ID", "ID")])])
+        for model_id in ["model-a", "model-b"]]
+    progress = SchemaProgress()
+    pool = SimpleNamespace(id="pool", name="Pool", get_data_models=lambda: models)
+
+    graph = build_data_pool_graph(pool, progress=progress)
+
+    assert [table.id for table in graph.tables] == [
+        f"{model}/table:{table}" for model in ["model-a", "model-b"] for table in ["orders", "items"]
+    ]
+    assert [table.columns[0]["name"] for table in graph.tables] == [
+        "model-a-orders", "model-a-items", "model-b-orders", "model-b-items",
+    ]
+    assert [(edge.key, edge.source, edge.target) for edge in graph.relationships] == [
+        (f"{model}/join", f"{model}/table:items", f"{model}/table:orders")
+        for model in ["model-a", "model-b"]
+    ]
+    assert [event for event in progress.events if event[0] == "start"] == [("start", 4)]
+    assert [event[1] for event in progress.events if event[0] == "update"] == [1, 2, 3, 4]
+    assert progress.events[-1] == ("finish",)
+
+
+def test_pool_uses_one_executor_with_at_most_10_outstanding_requests(monkeypatch):
+    executors = []
+    barrier = Barrier(10, timeout=5)
+
+    class RecordingExecutor(ThreadPoolExecutor):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            self.submitted = []
+            self.peak_pending = 0
+            executors.append(self)
+
+        def submit(self, *args, **kwargs):
+            pending = sum(not future.done() for future in self.submitted)
+            future = super().submit(*args, **kwargs)
+            self.submitted.append(future)
+            self.peak_pending = max(self.peak_pending, pending + 1)
+            return future
+
+    class ConcurrentTable(Table):
+        def get_columns(self):
+            barrier.wait()
+            return [Column("ID")]
+
+    class ConcurrentModel(DataModel):
+        def get_tables(self):
+            barrier.wait()
+            return self.tables
+
+        def get_foreign_keys(self):
+            barrier.wait()
+            return []
+
+    models = [ConcurrentModel(str(i), str(i), [
+        ConcurrentTable("orders", "Orders"), ConcurrentTable("items", "Items"),
+    ], []) for i in range(20)]
+    monkeypatch.setattr(erd_module, "ThreadPoolExecutor", RecordingExecutor)
+
+    graph = build_data_pool_graph(SimpleNamespace(id="pool", name="Pool", get_data_models=lambda: models))
+
+    assert len(graph.tables) == 40
+    assert len(executors) == 1
+    assert len(executors[0].submitted) == 80  # 40 metadata and 40 column requests.
+    assert executors[0].peak_pending == 10
+
+
+def test_table_only_loading_overlaps_metadata_and_skips_columns():
+    barrier = Barrier(2, timeout=5)
+    table = Table("orders", "Orders")
+    table.get_columns = Mock(side_effect=AssertionError("Columns must not be fetched"))
+
+    class ConcurrentModel(DataModel):
+        def get_tables(self):
+            barrier.wait()
+            return [None, table]
+
+        def get_foreign_keys(self):
+            barrier.wait()
+            return [None]
+
+    progress = SchemaProgress()
+    graph = build_data_model_graph(ConcurrentModel("model", "Model", [], []), include_columns=False, progress=progress)
+
+    assert len(graph.tables) == 1
+    assert graph.tables[0].columns == []
+    table.get_columns.assert_not_called()
+    assert all(event[0] == "message" for event in progress.events)
+
+
+@pytest.mark.parametrize("failing_method", ["get_tables", "get_foreign_keys", "get_columns"])
+def test_schema_request_errors_propagate_and_close_column_progress(failing_method):
+    table = Table("orders", "Orders")
+    model = DataModel("model", "Model", [table], [])
+    error = RuntimeError("Schema unavailable")
+    target = table if failing_method == "get_columns" else model
+    setattr(target, failing_method, Mock(side_effect=error))
+    progress = SchemaProgress()
+
+    with pytest.raises(RuntimeError, match="Schema unavailable") as caught:
+        build_data_model_graph(model, progress=progress)
+
+    assert caught.value is error
+    if failing_method == "get_columns":
+        assert progress.events[-1] == ("finish",)
+
+
+def test_empty_model_has_no_column_progress():
+    progress = SchemaProgress()
+    graph = build_data_model_graph(DataModel("model", "Model", [], []), progress=progress)
+    assert graph.tables == []
+    assert graph.relationships == []
+    assert all(event[0] == "message" for event in progress.events)
 
 
 def stub_cli_pool(monkeypatch, models):

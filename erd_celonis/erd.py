@@ -12,12 +12,17 @@ caller import the package without creating a Celonis connection.
 
 from __future__ import annotations
 
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from functools import partial
 import html
 import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Mapping, Sequence
+from typing import Any, Callable, Iterable, Iterator, Mapping, Sequence
+
+
+# Match the SDK's default HTTP connection cap without changing its transport.
+_SCHEMA_REQUEST_LIMIT = 10
 
 
 @dataclass
@@ -90,24 +95,11 @@ def build_data_model_graph(
         configured the foreign key.
     """
 
-    if progress is not None:
-        progress("Fetching table metadata...")
-    tables = data_model.get_tables()
-    if progress is not None:
-        progress(f"Found {len(tables)} table(s).")
-        progress("Fetching foreign-key metadata...")
-    foreign_keys = data_model.get_foreign_keys()
-    if progress is not None:
-        progress(f"Found {len(foreign_keys)} foreign-key relationship(s).")
-
-    return _build_graph(
-        data_model,
-        tables=tables,
-        foreign_keys=foreign_keys,
+    return _load_model_graphs(
+        [data_model],
         include_columns=include_columns,
-        namespace=str(data_model.id),
         progress=progress,
-    )
+    )[0]
 
 
 def build_data_pool_graph(
@@ -148,12 +140,10 @@ def build_data_pool_graph(
         }
     )
 
-    for model in data_models:
-        model_graph = build_data_model_graph(
-            model,
-            include_columns=include_columns,
-            progress=progress,
-        )
+    model_graphs = _load_model_graphs(
+        data_models, include_columns=include_columns, progress=progress,
+    )
+    for model, model_graph in zip(data_models, model_graphs):
         namespace = str(model.id)
         node_ids: dict[str, str] = {}
         for table in model_graph.tables:
@@ -185,6 +175,87 @@ def build_data_pool_graph(
         )
 
     return graph
+
+
+def _run_requests(
+    executor: ThreadPoolExecutor,
+    requests: Iterable[tuple[Any, Callable[[], Any]]],
+) -> Iterator[tuple[Any, Any]]:
+    """Yield completed requests within the shared schema request limit."""
+    requests = iter(requests)
+    pending: dict[Future, Any] = {}
+    try:
+        while True:
+            while len(pending) < _SCHEMA_REQUEST_LIMIT:
+                try:
+                    key, request = next(requests)
+                except StopIteration:
+                    break
+                pending[executor.submit(request)] = key
+            if not pending:
+                return
+            completed, _ = wait(pending, return_when=FIRST_COMPLETED)
+            for future in completed:
+                key = pending.pop(future)
+                yield key, future.result()
+    finally:
+        for future in pending:
+            future.cancel()
+
+
+def _load_model_graphs(
+    models: Sequence[Any],
+    *,
+    include_columns: bool,
+    progress: Callable[[str], None] | None,
+) -> list[ERDGraph]:
+    """Share one bounded executor across models and both metadata phases.
+
+    Finish table discovery before column work so progress has a stable total.
+    All result collection and progress reporting happens on the calling thread;
+    graph assembly follows source order rather than request completion order.
+    """
+    tables_by_model: list[list[Any]] = [[] for _ in models]
+    foreign_keys_by_model: list[list[Any]] = [[] for _ in models]
+    if progress is not None:
+        progress(f"Fetching table and foreign-key metadata for {len(models)} data model(s)...")
+    with ThreadPoolExecutor(max_workers=_SCHEMA_REQUEST_LIMIT, thread_name_prefix="erd-schema") as executor:
+        metadata_requests = (
+            ((index, kind), request)
+            for index, model in enumerate(models)
+            for kind, request in (("tables", model.get_tables), ("foreign_keys", model.get_foreign_keys))
+        )
+        for (index, kind), result in _run_requests(executor, metadata_requests):
+            if kind == "tables":
+                tables_by_model[index] = [table for table in result if table is not None]
+            else:
+                foreign_keys_by_model[index] = list(result)
+
+        table_records = [
+            (table, str(table.id), f"{index}/{table.id}", str(table.alias or table.name or table.id))
+            for index, tables in enumerate(tables_by_model)
+            for table in tables
+        ]
+        if progress is not None:
+            progress(f"Found {len(table_records)} table(s).")
+            progress(f"Found {sum(len(keys) for keys in foreign_keys_by_model)} foreign-key relationship(s).")
+        columns_by_node = _fetch_table_columns_parallel(
+            table_records, executor=executor, include_columns=include_columns, progress=progress,
+        )
+
+    return [
+        _build_graph(
+            model,
+            tables=tables_by_model[index],
+            foreign_keys=foreign_keys_by_model[index],
+            columns_by_table={
+                str(table.id): columns_by_node[f"{index}/{table.id}"]
+                for table in tables_by_model[index]
+            },
+            namespace=str(model.id),
+        )
+        for index, model in enumerate(models)
+    ]
 
 
 def render_erd(
@@ -407,9 +478,8 @@ def _build_graph(
     *,
     tables: Iterable[Any],
     foreign_keys: Iterable[Any],
-    include_columns: bool,
+    columns_by_table: Mapping[str, list[dict[str, Any]]],
     namespace: str,
-    progress: Callable[[str], None] | None,
 ) -> ERDGraph:
     graph = ERDGraph(
         metadata={
@@ -422,23 +492,11 @@ def _build_graph(
     table_nodes: dict[str, str] = {}
     table_primary_keys: dict[str, set[str]] = {}
 
-    if progress is not None:
-        progress(f"Preparing {len(table_items)} table(s)...")
-    table_records: list[tuple[Any, str, str, str]] = []
     for table in table_items:
         table_id = str(table.id)
         node_id = f"table:{table_id}"
         table_nodes[table_id] = node_id
-        table_records.append((table, table_id, node_id, str(table.alias or table.name or table.id)))
-
-    columns_by_node = _fetch_table_columns_parallel(
-        table_records,
-        include_columns=include_columns,
-        progress=progress,
-    )
-
-    for table, _table_id, node_id, _display_name in table_records:
-        columns = columns_by_node[node_id]
+        columns = columns_by_table[table_id]
         primary_keys = _primary_keys(table, columns)
         table_primary_keys[node_id] = {key.casefold() for key in primary_keys}
         graph.tables.append(
@@ -494,9 +552,9 @@ def _build_graph(
 def _fetch_table_columns_parallel(
     table_records: Sequence[tuple[Any, str, str, str]],
     *,
+    executor: ThreadPoolExecutor,
     include_columns: bool,
     progress: Callable[[str], None] | None,
-    max_workers: int = 16,
 ) -> dict[str, list[dict[str, Any]]]:
     """Fetch table columns concurrently while preserving deterministic output order."""
 
@@ -506,20 +564,16 @@ def _fetch_table_columns_parallel(
 
     total = len(table_records)
     _columns_started(progress, total)
-    worker_count = min(max_workers, total)
-    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="erd-columns") as executor:
-        futures = {
-            executor.submit(_table_columns, table, include_columns=True, progress=None): (table_name, node_id)
-            for table, _table_id, node_id, table_name in table_records
-        }
-        completed = 0
-        for future in as_completed(futures):
-            table_name, node_id = futures[future]
-            columns_by_node[node_id] = future.result()
-            completed += 1
+    requests = (
+        ((table_name, node_id), partial(_table_columns, table, include_columns=True, progress=None))
+        for table, _table_id, node_id, table_name in table_records
+    )
+    try:
+        for completed, ((table_name, node_id), columns) in enumerate(_run_requests(executor, requests), start=1):
+            columns_by_node[node_id] = columns
             _columns_updated(progress, completed, total, table_name)
-
-    _columns_finished(progress)
+    finally:
+        _columns_finished(progress)
     return columns_by_node
 
 
