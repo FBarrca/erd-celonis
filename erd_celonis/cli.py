@@ -2,8 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
+import csv
+import json
 import os
+import sys
 import time
+from collections.abc import Callable
+from typing import Any
+
 from fire import Fire
 from rich.console import Console
 from rich.progress import (
@@ -18,7 +25,8 @@ from rich.status import Status
 
 from .ddl import graph_to_ddl
 from .erd import build_data_pool_graph
-from .query import QueryRunner
+from .pql_script import PqlScriptError, is_bare_expression, parse_pql_script
+from .query import QueryError, QueryRunner
 from .web import serve_graph
 
 
@@ -126,6 +134,27 @@ class _StatusLine:
             self._status = None
 
 
+def _connect_data_pool(pool_id: str, report: Callable[[str], None]) -> Any:
+    """Authenticate with CeloFast using .env or shell variables and load a data pool."""
+
+    report("Loading environment configuration...")
+
+    # Import lazily so importing the CLI does not create a network connection.
+    from dotenv import find_dotenv, load_dotenv
+    from celofast import get_celonis
+
+    dotenv_path = find_dotenv(usecwd=True)
+    if dotenv_path:
+        report(f"Loading environment from {dotenv_path}")
+    else:
+        report("No .env file found; using existing shell environment variables.")
+    load_dotenv(dotenv_path)
+    report("Connecting to Celonis...")
+    celonis = get_celonis()
+    report(f"Loading data pool {pool_id}...")
+    return celonis.data_integration.get_data_pool(pool_id)
+
+
 def erd(
     pool_id: str | None = None,
     data_model_id: str | None = None,
@@ -166,22 +195,7 @@ def erd(
     report = status
 
     try:
-        report("Loading environment configuration...")
-
-        # Import lazily so importing the CLI does not create a network connection.
-        from dotenv import find_dotenv, load_dotenv
-        from celofast import get_celonis
-
-        dotenv_path = find_dotenv(usecwd=True)
-        if dotenv_path:
-            report(f"Loading environment from {dotenv_path}")
-        else:
-            report("No .env file found; using existing shell environment variables.")
-        load_dotenv(dotenv_path)
-        report("Connecting to Celonis...")
-        celonis = get_celonis()
-        report(f"Loading data pool {pool_id}...")
-        data_pool = celonis.data_integration.get_data_pool(pool_id)
+        data_pool = _connect_data_pool(pool_id, report)
         graph = build_data_pool_graph(
             data_pool,
             data_model_id=data_model_id,
@@ -201,6 +215,102 @@ def erd(
     serve_graph(graph, host=host, port=port, open_browser=open_browser, query_runner=query_runner)
 
 
+PQL_EPILOG = """\
+Examples:
+  erd-celonis pql POOL MODEL 'COUNT_TABLE("ORDERS")'
+  erd-celonis pql POOL MODEL - --format csv <<'EOF'
+  FILTER "ORDERS"."VALUE" > 100;
+  TABLE("ORDERS"."ID" AS "Order", "ORDERS"."VALUE") LIMIT 20;
+  EOF
+
+Scripts use the PQL console syntax: FILTER ...; TABLE([DISTINCT] expr AS "Name", ...) LIMIT n;
+A bare expression is wrapped in TABLE(...). Discover tables with: erd-celonis POOL MODEL --ddl
+
+Output: the result on stdout, progress on stderr.
+Exit codes: 0 success, 1 connection or PQL failure, 2 invalid arguments or script."""
+
+
+def _pql_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="erd-celonis pql",
+        description="Run a PQL query against a Celonis data model using CeloFast credentials.",
+        epilog=PQL_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    parser.add_argument("pool_id", help="Celonis data pool ID.")
+    parser.add_argument("data_model_id", help="Data model ID within the pool.")
+    parser.add_argument("query", nargs="?", help="PQL script, or - to read it from stdin.")
+    parser.add_argument("-f", "--file", help="Read the PQL script from a file.")
+    parser.add_argument("--format", choices=("json", "csv"), default="json", help="Output format (default: json).")
+    parser.add_argument("--limit", type=int, help="Row limit, 1-10,000. Overrides LIMIT in the script (default: 1000).")
+    parser.add_argument("--distinct", action="store_true", help="Return distinct rows only.")
+    return parser
+
+
+def _write_csv(result: dict[str, Any]) -> None:
+    writer = csv.writer(sys.stdout, lineterminator="\n")
+    writer.writerow(column["name"] for column in result["columns"])
+    writer.writerows(result["rows"])
+
+
+def pql(argv: list[str]) -> int:
+    """Run one PQL script and write its result to stdout. Returns the exit code."""
+
+    parser = _pql_parser()
+    args = parser.parse_args(argv)
+    if (args.query is None) == (args.file is None):
+        parser.error("Pass the PQL script as an argument, as - for stdin, or with --file.")
+    if args.limit is not None and not 1 <= args.limit <= 10_000:
+        parser.error("--limit must be between 1 and 10,000.")
+    if args.file is not None:
+        try:
+            with open(args.file, encoding="utf-8") as handle:
+                script = handle.read()
+        except OSError as exc:
+            parser.error(f"Could not read {args.file}: {exc.strerror}")
+    else:
+        script = sys.stdin.read() if args.query == "-" else args.query
+    if is_bare_expression(script):
+        script = f"TABLE({script.strip().rstrip(';')})"
+
+    try:
+        request = parse_pql_script(script)
+    except PqlScriptError as exc:
+        print(f"error: {exc}", file=sys.stderr)
+        return 2
+    if args.limit is not None:
+        request["limit"] = args.limit
+    request["distinct"] = request["distinct"] or args.distinct
+    payload = {"model_id": args.data_model_id, "columns": request["columns"], "filters": request["filters"],
+               "limit": request["limit"], "distinct": request["distinct"]}
+
+    status = _StatusLine(stderr=True)
+    error, code = None, 0
+    try:
+        data_pool = _connect_data_pool(args.pool_id, status)
+        status(f"Running PQL on data model {args.data_model_id}...")
+        result = QueryRunner(data_pool, {args.data_model_id})(payload)
+    except QueryError as exc:
+        error, code = exc, 1 if exc.status >= 409 else 2
+    except Exception as exc:  # Authentication and connection failures from CeloFast/PyCelonis.
+        error, code = exc, 1
+    finally:
+        status.close()
+    if error is not None:
+        print(f"error: {error}", file=sys.stderr)
+        return code
+
+    if args.format == "csv":
+        _write_csv(result)
+    else:
+        print(json.dumps(result, ensure_ascii=False))
+    if result["limit_reached"]:
+        print(f"[erd-celonis] Row limit {result['limit']:,} reached; results may be truncated.", file=sys.stderr)
+    return 0
+
+
 def main() -> None:
-    """Run the root Fire command."""
+    """Run the pql subcommand, or the root Fire command for the explorer."""
+    if sys.argv[1:2] == ["pql"]:
+        sys.exit(pql(sys.argv[2:]))
     Fire(erd)

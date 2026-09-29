@@ -102,6 +102,29 @@ Click **Run**, or press **Ctrl+Enter** (**Cmd+Enter** on macOS). Adjust **Limit*
 
 Drag the console's top edge to resize it, or use its expand and collapse buttons. Query drafts save per model in your browser; results are cleared when you switch models or reload. Imported diagrams do not offer query execution.
 
+## Run PQL from the command line
+
+`erd-celonis pql` runs one query without opening the browser, using the same credentials and query syntax as the console. It's designed for scripts and coding agents.
+
+```bash
+# Discover tables and columns first
+erd-celonis "<data-pool-id>" "<data-model-id>" --ddl
+
+# A single expression is wrapped in TABLE(...) for you
+erd-celonis pql "<data-pool-id>" "<data-model-id>" 'COUNT_TABLE("Orders")'
+
+# Read a full script from stdin to avoid shell-quoting problems
+erd-celonis pql "<data-pool-id>" "<data-model-id>" - --format csv <<'EOF'
+FILTER "Orders"."AMOUNT" > 100;
+TABLE("Orders"."CUSTOMER_ID" AS "Customer", SUM("Orders"."AMOUNT") AS "Total") LIMIT 50;
+EOF
+```
+
+You can also pass `--file query.pql`. `--limit` (default 1,000, maximum 10,000) and `--distinct` override the script.
+
+- **Output:** results go to stdout as JSON (default) or CSV, and progress goes to stderr. The JSON contains `columns`, `rows`, `row_count`, `limit`, and `limit_reached`. When `limit_reached` is true, raise the limit to get the remaining rows.
+- **Exit codes:** `0` success, `1` connection or PQL execution failure, `2` invalid arguments or script. Errors go to stderr as `error: ...`.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |
