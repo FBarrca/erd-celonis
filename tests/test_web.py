@@ -103,7 +103,7 @@ def test_cli_without_pool_starts_offline_without_authentication(monkeypatch):
     real_import = builtins.__import__
 
     def guard(name, *args, **kwargs):
-        assert name not in {"celofast", "dotenv"}, "Offline mode must not load credentials or connect"
+        assert name not in {"pycelonis", "dotenv"}, "Offline mode must not load credentials or connect"
         return real_import(name, *args, **kwargs)
 
     serve = Mock()

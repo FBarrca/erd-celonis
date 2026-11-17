@@ -134,14 +134,38 @@ class _StatusLine:
             self._status = None
 
 
+OAUTH_ENV_VARS = ("OAUTH_CLIENT_ID", "OAUTH_CLIENT_SECRET", "OAUTH_SCOPES")
+
+
+def _get_celonis() -> Any:
+    """Return a PyCelonis client authenticated with OAuth client credentials from the environment."""
+
+    # Import lazily so importing the CLI does not load PyCelonis or connect.
+    from pycelonis import get_celonis, oauth2
+    from pycelonis_core.client import KeyType
+
+    base_url = os.environ.get("CELONIS_URL", "").rstrip("/")
+    if not base_url:
+        raise RuntimeError("CELONIS_URL must be set to connect to Celonis.")
+    missing = [name for name in OAUTH_ENV_VARS if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError(f"{', '.join(missing)} must be set to connect to Celonis.")
+    client_id, client_secret, scopes = (os.environ[name] for name in OAUTH_ENV_VARS)
+
+    return get_celonis(
+        base_url=base_url,
+        api_token=oauth2(client_id, client_secret, scopes),
+        key_type=KeyType.BEARER
+    )
+
+
 def _connect_data_pool(pool_id: str, report: Callable[[str], None]) -> Any:
-    """Authenticate with CeloFast using .env or shell variables and load a data pool."""
+    """Authenticate with PyCelonis using .env or shell variables and load a data pool."""
 
     report("Loading environment configuration...")
 
-    # Import lazily so importing the CLI does not create a network connection.
+    # Import lazily so offline mode never reads credentials.
     from dotenv import find_dotenv, load_dotenv
-    from celofast import get_celonis
 
     dotenv_path = find_dotenv(usecwd=True)
     if dotenv_path:
@@ -150,7 +174,7 @@ def _connect_data_pool(pool_id: str, report: Callable[[str], None]) -> Any:
         report("No .env file found; using existing shell environment variables.")
     load_dotenv(dotenv_path)
     report("Connecting to Celonis...")
-    celonis = get_celonis()
+    celonis = _get_celonis()
     report(f"Loading data pool {pool_id}...")
     return celonis.data_integration.get_data_pool(pool_id)
 
@@ -174,7 +198,7 @@ def erd(
             in the pool are loaded.
         include_columns: Fetch and render table columns when true.
         key_type: Deprecated compatibility argument. Authentication is
-            handled by CeloFast's OAuth client factory.
+            handled by OAuth client credentials (see README).
         host: Address on which to serve the explorer. Defaults to local-only.
         port: HTTP port. Use 0 to select an available port automatically.
         open_browser: Open the explorer in the default browser when ready.
@@ -233,7 +257,7 @@ Exit codes: 0 success, 1 connection or PQL failure, 2 invalid arguments or scrip
 def _pql_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="erd-celonis pql",
-        description="Run a PQL query against a Celonis data model using CeloFast credentials.",
+        description="Run a PQL query against a Celonis data model using OAuth credentials from .env.",
         epilog=PQL_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -292,7 +316,7 @@ def pql(argv: list[str]) -> int:
         result = QueryRunner(data_pool, {args.data_model_id})(payload)
     except QueryError as exc:
         error, code = exc, 1 if exc.status >= 409 else 2
-    except Exception as exc:  # Authentication and connection failures from CeloFast/PyCelonis.
+    except Exception as exc:  # Authentication and connection failures from PyCelonis.
         error, code = exc, 1
     finally:
         status.close()

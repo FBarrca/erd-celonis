@@ -13,3 +13,6 @@ frontend/node_modules/
 # Local Celonis credentials
 .env
 !.env.example
+
+# Cached data model schemas for the erd-pql skill
+.erd-cache/
